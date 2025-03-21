@@ -38,7 +38,6 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    window: Query<&Window>,
 ) {
     commands.spawn(Camera2d);
 
@@ -49,9 +48,9 @@ fn setup(
             jump_started_at: 0.0,
             current_velocity: 0.0,
         },
+        Transform::from_xyz(0.0, 0.0, 0.0),
         Mesh2d(meshes.add(Rectangle::new(100.0, 100.0))),
         MeshMaterial2d(materials.add(Color::srgb(1.0, 1.0, 1.0))),
-        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 }
 
