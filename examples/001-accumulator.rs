@@ -1,3 +1,5 @@
+// Features a simple allocator and a visual gauge. Hit Space to increment. Decrements over time.
+
 use bevy::prelude::*;
 
 const GAUGE_Y: f32 = 0.0;

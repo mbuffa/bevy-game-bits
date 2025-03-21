@@ -1,4 +1,4 @@
-// Features a very basic Jump mechanic. No physics engine used, just a parabola.
+// Features a very basic Jump mechanic. No physics engine used, just a formula.
 
 use bevy::prelude::*;
 
