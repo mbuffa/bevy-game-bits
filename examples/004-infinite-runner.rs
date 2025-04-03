@@ -2,8 +2,6 @@
 
 // TODO:
 // * Add instructions on the InsertCOin state.
-// * Fix the cvrash when quitting the game and it's on Play State
-//  * Occurs because some systems run with no window registered.
 // * Check for a better way to handle state transitions
 // * Check for a better way to handle entities spawn
 // * Declare a Jump or Player Plugin
@@ -14,11 +12,16 @@
 use bevy::math::bounding::{Aabb2d, IntersectsVolume};
 use bevy::prelude::*;
 
+const WINDOW_WIDTH: f32 = 800.0;
+const WINDOW_HEIGHT: f32 = 600.0;
 const SCREEN_UNIT: f32 = 22.0;
 const PLAYER_WIDTH: f32 = 24.0;
 const PLAYER_HEIGHT: f32 = 72.0;
 const SCOREBOARD_TEXT_PADDING: Val = Val::Px(4.0);
 const SCOREBOARD_FONT_SIZE: f32 = 16.0;
+
+#[derive(Resource)]
+struct WindowSize(f32, f32);
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum GameStates {
@@ -68,16 +71,17 @@ struct GameOverText;
 
 fn main() {
     App::new()
+        .insert_resource(WindowSize(WINDOW_WIDTH, WINDOW_HEIGHT))
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+        .insert_resource(GameState(GameStates::InsertCoin))
+        .insert_resource(Score(0))
         .add_event::<GameStateEvent>()
         .add_event::<CollisionEvent>()
-        .insert_resource(Score(0))
-        .insert_resource(GameState(GameStates::InsertCoin))
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, (setup, spawn_obstacles))
         .add_systems(
             Update,
-            maybe_transit_to_play.run_if(resource_equals(GameState(GameStates::InsertCoin))),
+            maybe_transit_to_play_state.run_if(resource_equals(GameState(GameStates::InsertCoin))),
         )
         .add_systems(
             Update,
@@ -106,7 +110,7 @@ fn main() {
             (
                 despawn_entities,
                 display_game_over_text,
-                maybe_transit_to_play,
+                maybe_transit_to_play_state,
             )
                 .run_if(resource_equals(GameState(GameStates::GameOver))),
         )
@@ -114,12 +118,13 @@ fn main() {
 }
 
 fn setup(
+    window_size: Res<WindowSize>,
     mut window: Single<&mut Window>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    window.resolution.set(800.0, 600.0);
+    window.resolution.set(window_size.0, window_size.1);
 
     // Camera
     commands.spawn(Camera2d);
@@ -127,7 +132,7 @@ fn setup(
     // Ground
     commands.spawn((
         Transform::from_xyz(0.0, 0.0 - (PLAYER_HEIGHT / 2.0), 0.0),
-        Mesh2d(meshes.add(Rectangle::new(window.resolution.width(), 1.0))),
+        Mesh2d(meshes.add(Rectangle::new(window_size.0, 1.0))),
         MeshMaterial2d(materials.add(Color::srgb(1.0, 1.0, 1.0))),
     ));
 
@@ -151,10 +156,10 @@ fn setup(
 
 fn spawn_entities(
     mut commands: Commands,
-    window: Single<&mut Window>,
+    window_size: Res<WindowSize>,
+    mut events: EventReader<GameStateEvent>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut events: EventReader<GameStateEvent>,
 ) {
     if events.is_empty() {
         return;
@@ -166,8 +171,6 @@ fn spawn_entities(
         Some(event) => {
             match event.to {
                 GameStates::Play => {
-                    let window_width = window.resolution.width();
-
                     // Player
                     commands.spawn((
                         Player,
@@ -178,7 +181,7 @@ fn spawn_entities(
                         },
                         Transform {
                             translation: Vec3::new(
-                                0.0 - (window_width / 2.0) + (window_width / 6.0),
+                                0.0 - (window_size.0 / 2.0) + (window_size.0 / 6.0),
                                 0.0,
                                 1.0,
                             ),
@@ -208,31 +211,27 @@ fn despawn_entities(
 }
 
 fn spawn_obstacles(
-    window: Single<&mut Window>,
     mut commands: Commands,
+    window_size: Res<WindowSize>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let window_width = window.resolution.width();
-
     commands.spawn((
         Obstacle,
-        Transform::from_xyz(window_width * 2., 0.0, 0.0),
+        Transform::from_xyz(window_size.0 * 2., 0.0, 0.0),
         Mesh2d(meshes.add(Rectangle::new(PLAYER_WIDTH, PLAYER_HEIGHT))),
         MeshMaterial2d(materials.add(Color::srgb(0.7, 0.0, 0.0))),
     ));
 }
 
 fn move_obstacles(
+    window_size: Res<WindowSize>,
     mut obstacles: Query<&mut Transform, With<Obstacle>>,
-    window: Single<&Window>,
     mut score: ResMut<Score>,
 ) {
-    let window_width = window.into_inner().width();
-
     for mut transform in obstacles.iter_mut() {
-        if transform.translation.x < (-window_width / 2.) {
-            transform.translation.x = window_width * 2.;
+        if transform.translation.x < (-window_size.0 / 2.) {
+            transform.translation.x = window_size.0 * 2.;
             score.0 += 100;
         } else {
             transform.translation.x -= 10.0;
@@ -253,7 +252,7 @@ fn detect_collisions(
     let player_transform = player.into_inner();
     let player_bounding_box = Aabb2d::new(
         player_transform.translation.truncate(),
-        player_transform.scale.truncate(),
+        player_transform.scale.truncate() / 2.,
     );
 
     for transform in obstacles.iter() {
@@ -283,7 +282,7 @@ fn maybe_transit_to_game_over(
     }
 }
 
-fn maybe_transit_to_play(
+fn maybe_transit_to_play_state(
     mut events: EventWriter<GameStateEvent>,
     mut game_state: ResMut<GameState>,
     keyboard: Res<ButtonInput<KeyCode>>,
