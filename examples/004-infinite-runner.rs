@@ -10,6 +10,7 @@
 
 use bevy::math::bounding::{Aabb2d, IntersectsVolume};
 use bevy::prelude::*;
+use rand::seq::IndexedRandom;
 
 const SCREEN_UNIT: f32 = 10.0;
 const WINDOW_WIDTH: f32 = 800.0;
@@ -21,6 +22,9 @@ const OBSTACLE_WIDTH: f32 = 8.0;
 const OBSTACLE_HEIGHT: f32 = 72.0;
 const SCOREBOARD_TEXT_PADDING: Val = Val::Px(4.0);
 const SCOREBOARD_FONT_SIZE: f32 = 48.0;
+
+const COLOR_WHITE: Color = Color::srgb(1.0, 1.0, 1.0);
+const COLOR_GRAY: Color = Color::srgb(0.7, 0.7, 0.7);
 
 #[derive(Resource)]
 struct WindowSize(f32, f32);
@@ -47,9 +51,35 @@ struct CollisionEvent;
 #[derive(Resource)]
 struct Score(u32);
 
+#[derive(Debug)]
+struct ElementTier {
+    velocity: f32,
+    size: Vec2,
+    color: Color,
+}
+
+impl ElementTier {
+    pub fn new(velocity: f32, size: Vec2, color: Color) -> Self {
+        Self {
+            velocity,
+            size,
+            color,
+        }
+    }
+}
+
 #[derive(Resource)]
-struct SpawnCooldowns {
-    tier1: f32,
+struct BackgroundElements {
+    spawn_cooldown: f32,
+    default_spawn_cooldown: f32,
+    tiers: Vec<ElementTier>,
+}
+
+#[derive(Resource)]
+struct Obstacles {
+    spawn_cooldown: f32,
+    default_spawn_cooldown: f32,
+    tiers: Vec<ElementTier>,
 }
 
 #[derive(Component)]
@@ -74,6 +104,20 @@ struct Player;
 struct Obstacle;
 
 #[derive(Component)]
+struct BackgroundElement;
+
+enum Kinds {
+    BackgroundElement,
+    Obstacle,
+}
+
+#[derive(Component)]
+struct Kind(Kinds);
+
+#[derive(Component)]
+struct Velocity(f32);
+
+#[derive(Component)]
 struct GameOverText;
 
 #[derive(Component)]
@@ -88,7 +132,26 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
         .insert_resource(GameState(GameStates::InsertCoin))
         .insert_resource(Score(0))
-        .insert_resource(SpawnCooldowns { tier1: 0.0 })
+        .insert_resource(BackgroundElements {
+            spawn_cooldown: 0.,
+            default_spawn_cooldown: 8.,
+            tiers: vec![
+                // Clouds
+                ElementTier::new(1.2, Vec2::new(28.0, 16.0), COLOR_GRAY),
+            ],
+        })
+        .insert_resource(Obstacles {
+            spawn_cooldown: 0.,
+            default_spawn_cooldown: 2.,
+            tiers: vec![
+                // Cactus
+                ElementTier::new(8., Vec2::new(OBSTACLE_WIDTH, OBSTACLE_HEIGHT), COLOR_WHITE),
+                // Stone
+                ElementTier::new(8., Vec2::new(56.0, 56.0), COLOR_GRAY),
+                // Bike
+                ElementTier::new(10., Vec2::new(72.0, 48.0), COLOR_WHITE),
+            ],
+        })
         .add_event::<GameStateEvent>()
         .add_event::<CollisionEvent>()
         .add_plugins(DefaultPlugins)
@@ -113,7 +176,8 @@ fn main() {
                 maybe_hide_instructions_text,
                 spawn_player,
                 spawn_obstacles,
-                move_obstacles,
+                spawn_background_elements,
+                move_moving_elements,
                 update_score_text,
                 detect_collisions,
                 maybe_transit_to_game_over,
@@ -225,27 +289,73 @@ fn spawn_obstacles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     time: Res<Time>,
-    mut cooldowns: ResMut<SpawnCooldowns>,
+    obstacles_resource: ResMut<Obstacles>,
 ) {
-    cooldowns.tier1 -= time.delta().as_secs_f32();
+    let elapsed_secs = time.delta().as_secs_f32();
 
-    if cooldowns.tier1 < 0.0 {
-        cooldowns.tier1 = 2.0;
+    let obstacles = obstacles_resource.into_inner();
 
-        commands.spawn((
-            Obstacle,
-            Transform {
-                translation: Vec3::new(
-                    window_size.0 * 2.,
-                    (OBSTACLE_HEIGHT - PLAYER_HEIGHT) / 2.,
-                    0.0,
-                ),
-                scale: Vec3::new(OBSTACLE_WIDTH, OBSTACLE_HEIGHT, 1.),
-                ..Default::default()
-            },
-            Mesh2d(meshes.add(Rectangle::new(1., 1.))),
-            MeshMaterial2d(materials.add(Color::srgb(1.0, 1.0, 1.0))),
-        ));
+    obstacles.spawn_cooldown -= elapsed_secs;
+    if obstacles.spawn_cooldown < 0. {
+        match obstacles.tiers.choose(&mut rand::rng()) {
+            Some(tier) => {
+                commands.spawn((
+                    Obstacle,
+                    Kind(Kinds::Obstacle),
+                    Velocity(tier.velocity),
+                    Transform {
+                        translation: Vec3::new(
+                            window_size.0 * 2.,
+                            (tier.size.y - PLAYER_HEIGHT) / 2.,
+                            0.0,
+                        ),
+                        scale: Vec3::new(tier.size.x, tier.size.y, 1.),
+                        ..Default::default()
+                    },
+                    Mesh2d(meshes.add(Rectangle::new(1., 1.))),
+                    MeshMaterial2d(materials.add(tier.color)),
+                ));
+            }
+            None => {}
+        }
+
+        obstacles.spawn_cooldown = obstacles.default_spawn_cooldown;
+    }
+}
+
+fn spawn_background_elements(
+    mut commands: Commands,
+    window_size: Res<WindowSize>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    time: Res<Time>,
+    elements_resource: ResMut<BackgroundElements>,
+) {
+    let elapsed_secs = time.delta().as_secs_f32();
+
+    let elements = elements_resource.into_inner();
+
+    elements.spawn_cooldown -= elapsed_secs;
+    if elements.spawn_cooldown < 0. {
+        match elements.tiers.choose(&mut rand::rng()) {
+            Some(tier) => {
+                commands.spawn((
+                    BackgroundElement,
+                    Kind(Kinds::BackgroundElement),
+                    Velocity(tier.velocity),
+                    Transform {
+                        translation: Vec3::new(window_size.0, window_size.1 / 3., 0.0),
+                        scale: Vec3::new(tier.size.x, tier.size.y, 1.),
+                        ..Default::default()
+                    },
+                    Mesh2d(meshes.add(Rectangle::new(1., 1.))),
+                    MeshMaterial2d(materials.add(tier.color)),
+                ));
+            }
+            None => {}
+        }
+
+        elements.spawn_cooldown = elements.default_spawn_cooldown;
     }
 }
 
@@ -258,18 +368,23 @@ fn despawn_entities(
     }
 }
 
-fn move_obstacles(
+fn move_moving_elements(
     mut commands: Commands,
     window_size: Res<WindowSize>,
-    mut obstacles: Query<(Entity, &mut Transform), With<Obstacle>>,
+    mut obstacles: Query<(Entity, &Kind, &mut Velocity, &mut Transform)>,
     mut score: ResMut<Score>,
 ) {
-    for (entity, mut transform) in obstacles.iter_mut() {
+    for (entity, kind, velocity, mut transform) in obstacles.iter_mut() {
         if transform.translation.x < (-window_size.0 / 2.) - OBSTACLE_WIDTH / 2. {
-            score.0 += 100;
+            match kind.0 {
+                Kinds::Obstacle => {
+                    score.0 += 100;
+                }
+                Kinds::BackgroundElement => {}
+            }
             commands.entity(entity).despawn();
         } else {
-            transform.translation.x -= 10.0;
+            transform.translation.x -= velocity.0;
         }
     }
 }
