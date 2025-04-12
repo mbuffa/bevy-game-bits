@@ -3,7 +3,6 @@
 // TODO:
 // * Check for a better way to handle state transitions
 // * Check for a better way to handle entities spawn
-// * Declare a Jump or Player Plugin
 // * Run all physics-related systems on the FixedUpdate scheduler
 // * Add progressive difficulty
 // * Add some parallax background
@@ -42,6 +41,7 @@ struct GameState(GameStates);
 
 #[derive(Event)]
 struct GameStateEvent {
+    #[allow(dead_code)]
     from: GameStates,
     to: GameStates,
 }
