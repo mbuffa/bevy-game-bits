@@ -1,8 +1,8 @@
 # Path Track
 
 |  Jump
-|| Load GLTF
-|| Input Pad
+ | Load GLTF
+ | Input Pad
 +  Infinite Runner
 |  Wireframe Graphics
 |  Projectiles (Fixed Circular Trajectory, Straight Line...)

@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 
-use crate::game_state::{GameStateEvent, GameStates};
-
 pub const SCOREBOARD_TEXT_PADDING: Val = Val::Px(4.0);
 pub const SCOREBOARD_FONT_SIZE: f32 = 48.0;
 
@@ -31,28 +29,17 @@ pub fn update_score_text(score_text: Single<&mut Text, With<ScoreText>>, score: 
     text.0 = score.0.to_string();
 }
 
-pub fn display_game_over_text(
-    mut commands: Commands,
-    mut game_state_events: EventReader<GameStateEvent>,
-) {
-    for event in game_state_events.read().into_iter() {
-        match event.to {
-            GameStates::GameOver => {
-                commands.spawn((
-                    Text2d::new("GAME OVER"),
-                    TextLayout::new_with_justify(JustifyText::Center),
-                    TextFont::from_font_size(48.0),
-                    GameOverText,
-                    InstructionsText,
-                    Transform::from_xyz(0.0, 0.0 + 48.0 + 16.0, 0.0),
-                ));
+pub fn display_game_over_text(mut commands: Commands) {
+    commands.spawn((
+        Text2d::new("GAME OVER"),
+        TextLayout::new_with_justify(JustifyText::Center),
+        TextFont::from_font_size(48.0),
+        GameOverText,
+        InstructionsText,
+        Transform::from_xyz(0.0, 0.0 + 48.0 + 16.0, 0.0),
+    ));
 
-                add_instructions_text(&mut commands)
-            }
-
-            _ => {}
-        }
-    }
+    add_instructions_text(&mut commands)
 }
 
 pub fn add_instructions_text(commands: &mut Commands) {
@@ -69,21 +56,8 @@ pub fn add_instructions_text(commands: &mut Commands) {
 pub fn maybe_hide_instructions_text(
     mut commands: Commands,
     ui_elements_query: Query<Entity, With<InstructionsText>>,
-    mut game_state_events: EventReader<GameStateEvent>,
 ) {
-    if ui_elements_query.is_empty() {
-        return;
-    }
-
-    for event in game_state_events.read().into_iter() {
-        match event.to {
-            GameStates::Play => {
-                for entity in ui_elements_query.iter() {
-                    commands.entity(entity).despawn();
-                }
-            }
-
-            _ => {}
-        }
+    for entity in ui_elements_query.iter() {
+        commands.entity(entity).despawn();
     }
 }
