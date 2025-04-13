@@ -2,8 +2,6 @@
 
 // TODO:
 // * Maybe run all physics-related systems on the FixedUpdate scheduler
-// * Add progressive difficulty
-// * Add more parallax background
 
 use bevy::prelude::*;
 
