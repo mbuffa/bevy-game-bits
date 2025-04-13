@@ -11,7 +11,6 @@ log = { version = "*", features = [
   "max_level_debug",
   "release_max_level_warn",
 ] }
-rand = "0.9.0"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
@@ -26,9 +25,11 @@ opt-level = 3
 # Compile the entire crate as one unit.
 # Slows compile times, marginal improvements.
 codegen-units = 1
+
+# FIXME: Disabled, because it causes a crash on Windows on release mode, with Bevy 0.15.3 on the Infinite Runner example.
 # Do a second optimization pass over the entire program, including dependencies.
 # Slows compile times, marginal improvements.
-lto = "thin"
+# lto = "thin"
 
 # Optimize for size in the wasm-release profile to reduce load times and bandwidth usage on web.
 [profile.wasm-release]
