@@ -54,7 +54,7 @@ impl Plugin for ActorsPlugin {
                 // Stone
                 ElementTier::with_default_transform(
                     5.0,
-                    8.0,
+                    12.0,
                     8.,
                     Vec2::new(56.0, 56.0),
                     COLOR_GRAY,
@@ -62,7 +62,7 @@ impl Plugin for ActorsPlugin {
                 // Bike
                 ElementTier::with_default_transform(
                     9.0,
-                    14.0,
+                    18.0,
                     10.,
                     Vec2::new(72.0, 48.0),
                     COLOR_WHITE,
