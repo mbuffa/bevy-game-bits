@@ -1,8 +1,5 @@
 // Features an Infinite Runner prototype
 
-// TODO:
-// * Maybe run all physics-related systems on the FixedUpdate scheduler
-
 use bevy::prelude::*;
 
 mod actors;

@@ -42,19 +42,19 @@ impl Plugin for GameStatePlugin {
                     maybe_transit_to_game_over,
                     spawn_obstacles,
                     spawn_background_elements,
-                    move_moving_elements,
                     update_score_text,
-                    detect_collisions,
                 )
                     .chain()
                     .run_if(in_state(GameStates::Play)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     jump::handle_jumping_state,
                     jump::update_player_velocity,
                     jump::update_player_transform,
+                    move_moving_elements,
+                    detect_collisions,
                 )
                     .run_if(in_state(GameStates::Play)),
             )

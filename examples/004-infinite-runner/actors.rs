@@ -158,11 +158,7 @@ pub fn spawn_scene_and_player(
     // Player
     commands.spawn((
         Player,
-        jump::JumpingState {
-            state: jump::JumpingStates::Idle,
-            jump_started_at: 0.0,
-            current_velocity: 0.0,
-        },
+        jump::JumpingState::default(),
         Transform {
             translation: Vec3::new(
                 0.0 - (window_size.0 / 2.0) + (window_size.0 / 6.0),
