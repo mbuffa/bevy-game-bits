@@ -2,7 +2,7 @@
 
 Welcome!
 
-This repository contains my experiments with the Bevy Engine. My goal is to learn the engine by building simple games after building precise game mechanics.
+This repository contains my experiments with the Bevy Engine. My goal is to learn how to use the engine by building simple games, after building precise game mechanics.
 
 ## Running examples
 
