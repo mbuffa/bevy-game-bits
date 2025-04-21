@@ -159,3 +159,6 @@ rustflags = [
 # This is not enabled by default, you need to copy this file to `config.toml`.
 [alias]
 ci = "run --package ci --"
+
+[target.wasm32-unknown-unknown]
+runner = "wasm-server-runner"
