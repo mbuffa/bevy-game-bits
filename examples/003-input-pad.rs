@@ -73,7 +73,7 @@ fn setup(
                     Text2d::new(label),
                     text_font.clone(),
                     TextColor(Color::Srgba(BLACK)),
-                    TextLayout::new(JustifyText::Left, LineBreak::AnyCharacter),
+                    TextLayout::new(Justify::Left, LineBreak::AnyCharacter),
                     TextBounds::from(key_size),
                     Transform::from_translation(Vec3::Z),
                 ));

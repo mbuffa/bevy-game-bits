@@ -29,12 +29,12 @@ struct Experience(u128);
 #[derive(Component)]
 struct XpGauge;
 
-#[derive(Event)]
+#[derive(Message)]
 struct CollisionEvent;
 
 fn main() {
     App::new()
-        .add_event::<CollisionEvent>()
+        .add_message::<CollisionEvent>()
         .insert_resource(Experience(0))
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup)
@@ -56,7 +56,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     window_q: Single<&Window>,
-) {
+) -> Result {
     let window: &Window = window_q.into_inner();
 
     commands.spawn(Camera2d);
@@ -85,7 +85,7 @@ fn setup(
             Mesh2d(meshes.add(Rectangle::new(1.0, 1.0))),
             MeshMaterial2d(materials.add(Color::from(WHITE))),
         ))
-        .with_children(|parent: &mut ChildBuilder<'_>| {
+        .with_children(|parent| {
             parent.spawn((
                 PlayerCollider(COLLIDER_SIZE),
                 Transform {
@@ -96,13 +96,15 @@ fn setup(
                 MeshMaterial2d(materials.add(Color::from(GREEN.with_alpha(0.1)))),
             ));
         });
+
+    Ok(())
 }
 
 fn move_player(
     player_q: Single<&mut Transform, With<Player>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-) {
+) -> Result {
     let mut player = player_q.into_inner();
 
     let elapsed: f32 = time.delta_secs();
@@ -122,6 +124,8 @@ fn move_player(
     if keyboard.pressed(KeyCode::ArrowDown) {
         player.translation.y -= PLAYER_SPEED * elapsed;
     }
+
+    Ok(())
 }
 
 fn maybe_spawn_xp(
@@ -153,7 +157,7 @@ fn detect_xp_collider_collision(
     player_q: Single<&Transform, With<Player>>,
     mut xp_q: Query<&mut Transform, (With<XP>, Without<PlayerCollider>, Without<Player>)>,
     time: Res<Time>,
-) {
+) -> Result {
     let elapsed = time.delta_secs();
 
     let collider = collider_q.into_inner();
@@ -181,6 +185,8 @@ fn detect_xp_collider_collision(
             }
         }
     }
+
+    Ok(())
 }
 
 fn do_detect_cllision(bounding_circle: BoundingCircle, aabb: Aabb2d) -> bool {
@@ -194,8 +200,8 @@ fn detect_xp_player_collision(
     mut commands: Commands,
     player_q: Single<&Transform, With<Player>>,
     xp_q: Query<(Entity, &Transform), With<XP>>,
-    mut events: EventWriter<CollisionEvent>,
-) {
+    mut events: MessageWriter<CollisionEvent>,
+) -> Result {
     let player_t = player_q.into_inner();
 
     let player_aabb = Aabb2d::new(
@@ -207,20 +213,22 @@ fn detect_xp_player_collision(
         let xp_aabb = Aabb2d::new(xp_t.translation.truncate(), xp_t.scale.truncate() / 2.0);
 
         if player_aabb.intersects(&xp_aabb.bounding_circle()) {
-            events.send(CollisionEvent);
+            events.write(CollisionEvent);
 
             commands.entity(xp_entity).despawn();
         }
     }
+
+    Ok(())
 }
 
 fn maybe_increase_score(
     mut experience: ResMut<Experience>,
     gauge_q: Single<&mut Node, With<XpGauge>>,
-    mut events: EventReader<CollisionEvent>,
-) {
+    mut events: MessageReader<CollisionEvent>,
+) -> Result {
     if events.is_empty() {
-        return;
+        return Ok(());
     }
 
     let mut gauge_node = gauge_q.into_inner();
@@ -234,4 +242,6 @@ fn maybe_increase_score(
         experience.0 += 100;
         gauge_node.width = Val::Px(experience.0 as f32 / 1000.0) * max_width;
     }
+
+    Ok(())
 }

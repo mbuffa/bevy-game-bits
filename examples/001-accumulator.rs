@@ -98,14 +98,10 @@ fn accumulate(
     mut query: Query<&mut Accumulator>,
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-) {
+) -> Result {
     let dt = time.delta_secs();
 
-    if query.is_empty() {
-        return;
-    }
-
-    let mut accumulator = query.single_mut();
+    let mut accumulator = query.single_mut()?;
 
     let diff = get_capped_gauge_variation(dt);
 
@@ -114,6 +110,8 @@ fn accumulate(
     } else {
         accumulator.decrement(diff);
     }
+
+    Ok(())
 }
 
 fn get_capped_gauge_variation(dt: f32) -> u8 {
@@ -123,15 +121,13 @@ fn get_capped_gauge_variation(dt: f32) -> u8 {
     values[1]
 }
 
-fn update_transform(mut query: Query<(&Accumulator, &Position, &mut Transform)>) {
-    if query.is_empty() {
-        return;
-    }
-
-    let (accumulator, original_position, mut transform) = query.single_mut();
+fn update_transform(mut query: Query<(&Accumulator, &Position, &mut Transform)>) -> Result {
+    let (accumulator, original_position, mut transform) = query.single_mut()?;
     transform.scale.y = accumulator.value as f32 / ACCUMULATOR_TO_SCALE_DIVIDER;
 
     let offset_maximum = accumulator.maximum as f32 / 2.0 * ACCUMULATOR_TO_MESH_HEIGHT_MULTIPLIER;
     let offset_value = accumulator.value as f32 / 2.0 * ACCUMULATOR_TO_MESH_HEIGHT_MULTIPLIER;
     transform.translation.y = original_position.0 - offset_maximum + offset_value;
+
+    Ok(())
 }
