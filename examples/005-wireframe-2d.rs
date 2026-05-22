@@ -1,11 +1,26 @@
 use bevy::{
     prelude::*,
-    sprite::{Wireframe2d, Wireframe2dColor, Wireframe2dPlugin},
+    render::{
+        render_resource::WgpuFeatures,
+        settings::{RenderCreation, WgpuSettings},
+        RenderPlugin,
+    },
+    sprite_render::{Wireframe2d, Wireframe2dColor, Wireframe2dPlugin},
 };
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, Wireframe2dPlugin::default()))
+        .add_plugins((
+            // POLYGON_MODE_LINE is native-only — works on DX12/Vulkan/Metal, NOT on web.
+            DefaultPlugins.set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(WgpuSettings {
+                    features: WgpuFeatures::POLYGON_MODE_LINE,
+                    ..default()
+                }),
+                ..default()
+            }),
+            Wireframe2dPlugin::default(),
+        ))
         .add_systems(Startup, setup)
         .run();
 }
