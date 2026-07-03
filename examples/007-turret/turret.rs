@@ -4,7 +4,7 @@ use std::f32::consts::{PI, TAU};
 use crate::config::*;
 use crate::enemy::Enemy;
 use crate::game::GameAssets;
-use crate::weapons::{BurstState, KineticWeapon, LaserWeapon};
+use crate::weapons::{KineticWeapon, LaserWeapon};
 
 #[derive(Component, Clone, Copy)]
 pub enum TurretKind {
@@ -136,9 +136,7 @@ pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKi
     root.insert(TurretParts { gun, sensor });
 
     match kind {
-        TurretKind::Kinetic => root.insert(KineticWeapon {
-            state: BurstState::Ready,
-        }),
+        TurretKind::Kinetic => root.insert(KineticWeapon::default()),
         TurretKind::Laser => root.insert(LaserWeapon {
             dps: LASER_DPS,
             firing_at: None,

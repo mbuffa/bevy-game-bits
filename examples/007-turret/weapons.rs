@@ -7,13 +7,18 @@ use crate::turret::{yaw_direction, Gun, TurretAi, TurretParts};
 
 #[derive(Component)]
 pub struct KineticWeapon {
-    pub state: BurstState,
+    pub shot_timer: Timer,
+    /// Total rounds fired, drives the every-Nth tracer cadence.
+    pub rounds_fired: u32,
 }
 
-pub enum BurstState {
-    Ready,
-    Firing { shots_left: u32, shot_timer: Timer },
-    Cooldown(Timer),
+impl Default for KineticWeapon {
+    fn default() -> Self {
+        Self {
+            shot_timer: Timer::from_seconds(MINIGUN_SHOT_INTERVAL, TimerMode::Repeating),
+            rounds_fired: 0,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -42,53 +47,58 @@ pub fn fire_kinetic(
             continue;
         };
 
-        match &mut weapon.state {
-            BurstState::Ready => {
-                if gun.aligned {
-                    spawn_projectile(&mut commands, &assets, root_transform.translation, gun.yaw);
-                    weapon.state = BurstState::Firing {
-                        shots_left: BURST_SHOTS - 1,
-                        shot_timer: Timer::from_seconds(BURST_SHOT_INTERVAL, TimerMode::Repeating),
-                    };
-                }
-            }
-            // Once started, a burst runs to completion even if aim wobbles.
-            BurstState::Firing {
-                shots_left,
-                shot_timer,
-            } => {
-                if shot_timer.tick(time.delta()).just_finished() {
-                    spawn_projectile(&mut commands, &assets, root_transform.translation, gun.yaw);
-                    *shots_left -= 1;
-                    if *shots_left == 0 {
-                        weapon.state =
-                            BurstState::Cooldown(Timer::from_seconds(BURST_COOLDOWN, TimerMode::Once));
-                    }
-                }
-            }
-            BurstState::Cooldown(timer) => {
-                if timer.tick(time.delta()).is_finished() {
-                    weapon.state = BurstState::Ready;
-                }
-            }
+        // Minigun: continuous stream while aimed; the stream pauses with the aim.
+        if !gun.aligned {
+            continue;
+        }
+
+        if weapon.shot_timer.tick(time.delta()).just_finished() {
+            let tracer = weapon.rounds_fired % TRACER_EVERY == 0;
+            spawn_projectile(
+                &mut commands,
+                &assets,
+                root_transform.translation,
+                gun.yaw,
+                tracer,
+            );
+            weapon.rounds_fired += 1;
         }
     }
 }
 
-fn spawn_projectile(commands: &mut Commands, assets: &GameAssets, root_pos: Vec3, yaw: f32) {
+fn spawn_projectile(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    root_pos: Vec3,
+    yaw: f32,
+    tracer: bool,
+) {
     let dir = yaw_direction(yaw);
     let muzzle = root_pos + Vec3::Y * GUN_HEIGHT + dir * BARREL_LENGTH;
 
-    commands.spawn((
+    let mut round = commands.spawn((
         Projectile {
             velocity: dir * PROJECTILE_SPEED,
-            damage: PROJECTILE_DAMAGE,
+            damage: MINIGUN_DAMAGE,
             radius: PROJECTILE_RADIUS,
         },
-        Mesh3d(assets.projectile_mesh.clone()),
-        MeshMaterial3d(assets.projectile_material.clone()),
         Transform::from_translation(muzzle),
     ));
+
+    // Most rounds are invisible; every Nth is a glowing tracer carrying a light.
+    if tracer {
+        round.insert((
+            Mesh3d(assets.projectile_mesh.clone()),
+            MeshMaterial3d(assets.projectile_material.clone()),
+            PointLight {
+                color: TRACER_LIGHT_COLOR,
+                intensity: 20_000.0,
+                range: 6.0,
+                shadows_enabled: false,
+                ..default()
+            },
+        ));
+    }
 }
 
 pub fn fire_lasers(
