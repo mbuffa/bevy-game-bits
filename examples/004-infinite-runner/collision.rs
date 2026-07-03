@@ -3,14 +3,14 @@ use bevy::prelude::*;
 
 use crate::actors::{Obstacle, Player};
 
-#[derive(Event, Default)]
+#[derive(Message, Default)]
 pub struct CollisionEvent;
 
 pub fn detect_collisions(
     player: Single<&Transform, With<Player>>,
     obstacles: Query<&Transform, With<Obstacle>>,
-    mut events: EventWriter<CollisionEvent>,
-) {
+    mut events: MessageWriter<CollisionEvent>,
+) -> Result {
     let player_transform = player.into_inner();
     let player_bounding_box = Aabb2d::new(
         player_transform.translation.truncate(),
@@ -24,7 +24,9 @@ pub fn detect_collisions(
         );
 
         if player_bounding_box.intersects(&obstacle_bounding_box) {
-            events.send_default();
+            events.write_default();
         }
     }
+
+    Ok(())
 }

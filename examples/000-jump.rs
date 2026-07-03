@@ -58,13 +58,9 @@ fn handle_jumping_state(
     mut query: Query<&mut JumpingState, With<Player>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-) {
-    if query.is_empty() {
-        return;
-    }
-
+) -> Result {
     if keyboard.just_pressed(KeyCode::Space) {
-        let mut jumping_state = query.single_mut();
+        let mut jumping_state = query.single_mut()?;
 
         match jumping_state.state {
             JumpingStates::Idle => {
@@ -74,16 +70,14 @@ fn handle_jumping_state(
             _ => {}
         }
     }
+
+    Ok(())
 }
 
-fn update_player_velocity(mut query: Query<&mut JumpingState, With<Player>>, time: Res<Time>) {
-    if query.is_empty() {
-        return;
-    }
-
+fn update_player_velocity(mut query: Query<&mut JumpingState, With<Player>>, time: Res<Time>) -> Result {
     let tt = time.elapsed_secs();
 
-    let mut jumping_state = query.single_mut();
+    let mut jumping_state = query.single_mut()?;
 
     if jumping_state.current_velocity < 0.0 {
         jumping_state.state = JumpingStates::Idle;
@@ -103,18 +97,18 @@ fn update_player_velocity(mut query: Query<&mut JumpingState, With<Player>>, tim
             jumping_state.jump_started_at = 0.0;
         }
     }
+
+    Ok(())
 }
 
-fn update_player_transform(mut query: Query<(&mut Transform, &JumpingState), With<Player>>) {
-    if query.is_empty() {
-        return;
-    }
-
-    let (mut transform, jumping_state) = query.single_mut();
+fn update_player_transform(mut query: Query<(&mut Transform, &JumpingState), With<Player>>) -> Result {
+    let (mut transform, jumping_state) = query.single_mut()?;
 
     if transform.translation.y < 0.0 {
         transform.translation.y = 0.0;
     } else {
         transform.translation.y = jumping_state.current_velocity * SCREEN_UNIT;
     }
+
+    Ok(())
 }

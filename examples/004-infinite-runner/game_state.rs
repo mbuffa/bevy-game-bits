@@ -22,7 +22,7 @@ impl Plugin for GameStatePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameStates>()
             .insert_resource(Score(0))
-            .add_event::<CollisionEvent>()
+            .add_message::<CollisionEvent>()
             .add_plugins(ActorsPlugin)
             .add_plugins(jump::JumpPlugin {
                 screen_unit: SCREEN_UNIT,
@@ -67,7 +67,7 @@ impl Plugin for GameStatePlugin {
     }
 }
 
-fn setup(window_size: Res<WindowSize>, mut window: Single<&mut Window>, mut commands: Commands) {
+fn setup(window_size: Res<WindowSize>, mut window: Single<&mut Window>, mut commands: Commands) -> Result {
     window.resolution.set(window_size.0, window_size.1);
 
     // Camera
@@ -75,7 +75,7 @@ fn setup(window_size: Res<WindowSize>, mut window: Single<&mut Window>, mut comm
 
     commands.spawn((
         Text2d::new("Infinite Runner"),
-        TextLayout::new_with_justify(JustifyText::Center),
+        TextLayout::new_with_justify(Justify::Center),
         TextFont::from_font_size(72.0),
         TitleText,
         InstructionsText,
@@ -87,6 +87,8 @@ fn setup(window_size: Res<WindowSize>, mut window: Single<&mut Window>, mut comm
     ));
 
     add_instructions_text(&mut commands);
+
+    Ok(())
 }
 
 pub fn maybe_transit_to_play_state(
@@ -102,7 +104,7 @@ pub fn maybe_transit_to_play_state(
 
 pub fn maybe_transit_to_game_over(
     mut next_state: ResMut<NextState<GameStates>>,
-    mut events: EventReader<CollisionEvent>,
+    mut events: MessageReader<CollisionEvent>,
 ) {
     if !events.is_empty() {
         events.clear();

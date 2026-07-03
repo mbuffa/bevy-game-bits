@@ -24,15 +24,17 @@ pub struct HitSpaceText;
 #[derive(Resource)]
 pub struct WindowSize(pub f32, pub f32);
 
-pub fn update_score_text(score_text: Single<&mut Text, With<ScoreText>>, score: Res<Score>) {
+pub fn update_score_text(score_text: Single<&mut Text, With<ScoreText>>, score: Res<Score>) -> Result {
     let mut text = score_text.into_inner();
     text.0 = score.0.to_string();
+
+    Ok(())
 }
 
 pub fn display_game_over_text(mut commands: Commands) {
     commands.spawn((
         Text2d::new("GAME OVER"),
-        TextLayout::new_with_justify(JustifyText::Center),
+        TextLayout::new_with_justify(Justify::Center),
         TextFont::from_font_size(48.0),
         GameOverText,
         InstructionsText,
@@ -45,7 +47,7 @@ pub fn display_game_over_text(mut commands: Commands) {
 pub fn add_instructions_text(commands: &mut Commands) {
     commands.spawn((
         Text2d::new("Hit Space to Play"),
-        TextLayout::new_with_justify(JustifyText::Center),
+        TextLayout::new_with_justify(Justify::Center),
         TextFont::from_font_size(16.0),
         HitSpaceText,
         InstructionsText,
