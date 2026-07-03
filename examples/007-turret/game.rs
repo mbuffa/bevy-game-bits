@@ -20,9 +20,14 @@ pub struct GameAssets {
     pub enemy_mesh: Handle<Mesh>,
     pub enemy_material: Handle<StandardMaterial>,
     pub flash_material: Handle<StandardMaterial>,
-    pub base_mesh: Handle<Mesh>,
+    pub leg_mesh: Handle<Mesh>,
+    pub leg_material: Handle<StandardMaterial>,
+    pub hub_mesh: Handle<Mesh>,
     pub kinetic_base_material: Handle<StandardMaterial>,
     pub laser_base_material: Handle<StandardMaterial>,
+    pub rock_mesh: Handle<Mesh>,
+    pub rock_material_a: Handle<StandardMaterial>,
+    pub rock_material_b: Handle<StandardMaterial>,
     pub barrel_mesh: Handle<Mesh>,
     pub barrel_material: Handle<StandardMaterial>,
     pub sensor_mesh: Handle<Mesh>,
@@ -41,7 +46,7 @@ impl Plugin for GamePlugin {
                 TimerMode::Repeating,
             )))
             .insert_resource(SimpleRng::from_time())
-            .add_systems(Startup, (setup_assets, scene::setup))
+            .add_systems(Startup, (setup_assets, scene::setup).chain())
             .add_systems(
                 Update,
                 (
@@ -83,7 +88,7 @@ fn setup_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.insert_resource(GameAssets {
-        enemy_mesh: meshes.add(Sphere::new(ENEMY_RADIUS)),
+        enemy_mesh: meshes.add(Cuboid::new(ENEMY_SIZE.x, ENEMY_SIZE.y, ENEMY_SIZE.z)),
         enemy_material: materials.add(StandardMaterial {
             base_color: ENEMY_COLOR,
             perceptual_roughness: 0.8,
@@ -95,7 +100,18 @@ fn setup_assets(
             unlit: true,
             ..default()
         }),
-        base_mesh: meshes.add(Cuboid::new(1.6, BASE_HEIGHT, 1.6)),
+        leg_mesh: meshes.add(Cuboid::new(
+            TRIPOD_LEG_THICKNESS,
+            (TRIPOD_APEX_HEIGHT * TRIPOD_APEX_HEIGHT + TRIPOD_FOOT_RADIUS * TRIPOD_FOOT_RADIUS)
+                .sqrt(),
+            TRIPOD_LEG_THICKNESS,
+        )),
+        leg_material: materials.add(StandardMaterial {
+            base_color: LEG_COLOR,
+            perceptual_roughness: 0.6,
+            ..default()
+        }),
+        hub_mesh: meshes.add(Sphere::new(0.3)),
         kinetic_base_material: materials.add(StandardMaterial {
             base_color: KINETIC_BASE_COLOR,
             perceptual_roughness: 0.9,
@@ -104,6 +120,17 @@ fn setup_assets(
         laser_base_material: materials.add(StandardMaterial {
             base_color: LASER_BASE_COLOR,
             perceptual_roughness: 0.9,
+            ..default()
+        }),
+        rock_mesh: meshes.add(Sphere::new(1.0)),
+        rock_material_a: materials.add(StandardMaterial {
+            base_color: ROCK_COLOR_A,
+            perceptual_roughness: 1.0,
+            ..default()
+        }),
+        rock_material_b: materials.add(StandardMaterial {
+            base_color: ROCK_COLOR_B,
+            perceptual_roughness: 1.0,
             ..default()
         }),
         barrel_mesh: meshes.add(Cuboid::new(0.25, 0.25, BARREL_LENGTH)),

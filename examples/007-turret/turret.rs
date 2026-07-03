@@ -89,11 +89,32 @@ pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKi
     ));
 
     root.with_children(|parent| {
-        // Base: static, never rotated, so child pivots' local yaw == world yaw.
+        // Tripod: three legs from evenly spaced feet up to a hub under the gun.
+        // The base never rotates, so child pivots' local yaw == world yaw.
+        let apex = Vec3::Y * TRIPOD_APEX_HEIGHT;
+        for i in 0..3 {
+            let angle = i as f32 * TAU / 3.0;
+            let foot = Vec3::new(
+                angle.sin() * TRIPOD_FOOT_RADIUS,
+                0.0,
+                angle.cos() * TRIPOD_FOOT_RADIUS,
+            );
+            parent.spawn((
+                Mesh3d(assets.leg_mesh.clone()),
+                MeshMaterial3d(assets.leg_material.clone()),
+                Transform {
+                    translation: (foot + apex) / 2.0,
+                    rotation: Quat::from_rotation_arc(Vec3::Y, (apex - foot).normalize()),
+                    ..default()
+                },
+            ));
+        }
+
+        // Kind-colored hub where the legs meet.
         parent.spawn((
-            Mesh3d(assets.base_mesh.clone()),
+            Mesh3d(assets.hub_mesh.clone()),
             MeshMaterial3d(base_material),
-            Transform::from_xyz(0.0, BASE_HEIGHT / 2.0, 0.0),
+            Transform::from_translation(apex),
         ));
 
         gun = parent

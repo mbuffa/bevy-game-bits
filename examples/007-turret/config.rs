@@ -6,7 +6,10 @@ use std::f32::consts::{FRAC_PI_3, PI};
 pub const FIELD_WIDTH: f32 = 40.0;
 pub const FIELD_DEPTH: f32 = 30.0;
 
-pub const ENEMY_RADIUS: f32 = 1.0;
+/// Bounding radius used for targeting, line-of-sight and projectile hits.
+pub const ENEMY_RADIUS: f32 = 0.5;
+/// Visual cuboid dimensions of a target.
+pub const ENEMY_SIZE: Vec3 = Vec3::new(1.0, 0.5, 0.7);
 pub const ENEMY_SPEED: f32 = 2.0;
 pub const ENEMY_MAX_HP: f32 = 100.0;
 
@@ -30,16 +33,23 @@ pub const SWEEP_SPEED: f32 = 65.0 * PI / 180.0;
 pub const GUN_TURN_SPEED: f32 = 65.0 * PI / 180.0;
 pub const ALIGN_THRESHOLD: f32 = 0.05; // ~3 degrees
 
-pub const BASE_HEIGHT: f32 = 0.6;
+pub const TRIPOD_APEX_HEIGHT: f32 = 0.85;
+pub const TRIPOD_FOOT_RADIUS: f32 = 0.8;
+pub const TRIPOD_LEG_THICKNESS: f32 = 0.12;
 pub const GUN_HEIGHT: f32 = 0.9;
 pub const SENSOR_HEIGHT: f32 = 1.3;
 pub const BARREL_LENGTH: f32 = 1.4;
 
 pub const FLASH_DURATION: f32 = 0.1;
 
-pub const CLEAR_COLOR: Color = Color::srgb(0.05, 0.07, 0.12);
-pub const GROUND_COLOR: Color = Color::srgb(0.22, 0.38, 0.85);
-pub const ENEMY_COLOR: Color = Color::srgb(0.75, 0.15, 0.25);
+pub const ROCK_COUNT: usize = 24;
+
+pub const CLEAR_COLOR: Color = Color::srgb(0.13, 0.07, 0.05);
+pub const GROUND_COLOR: Color = Color::srgb(0.71, 0.38, 0.24);
+pub const ROCK_COLOR_A: Color = Color::srgb(0.48, 0.23, 0.15);
+pub const ROCK_COLOR_B: Color = Color::srgb(0.55, 0.30, 0.20);
+pub const ENEMY_COLOR: Color = Color::srgb(0.16, 0.34, 0.30);
+pub const LEG_COLOR: Color = Color::srgb(0.16, 0.16, 0.19);
 pub const KINETIC_BASE_COLOR: Color = Color::srgb(0.35, 0.38, 0.42);
 pub const LASER_BASE_COLOR: Color = Color::srgb(0.16, 0.55, 0.55);
 pub const BARREL_COLOR: Color = Color::srgb(0.15, 0.15, 0.18);

@@ -53,6 +53,11 @@ impl SimpleRng {
     pub fn range_u32(&mut self, low: u32, high_inclusive: u32) -> u32 {
         low + (self.next_u64() >> 33) as u32 % (high_inclusive - low + 1)
     }
+
+    pub fn range_f32(&mut self, low: f32, high: f32) -> f32 {
+        let unit = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
+        low + unit * (high - low)
+    }
 }
 
 pub fn spawn_waves(
@@ -81,7 +86,7 @@ pub fn spawn_waves(
             Velocity(Vec3::Z * ENEMY_SPEED),
             Mesh3d(assets.enemy_mesh.clone()),
             MeshMaterial3d(assets.enemy_material.clone()),
-            Transform::from_xyz(x, ENEMY_RADIUS, -FIELD_DEPTH / 2.0),
+            Transform::from_xyz(x, ENEMY_SIZE.y / 2.0, -FIELD_DEPTH / 2.0),
         ));
     }
 }
