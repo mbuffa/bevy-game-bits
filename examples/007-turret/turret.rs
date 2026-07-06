@@ -18,24 +18,20 @@ pub enum TurretAi {
     TargetAcquired(Entity),
 }
 
-/// Direct handles to a turret's part entities, so AI systems can address
-/// the gun and sensor without walking the `Children` hierarchy.
+/// Direct handle to a turret's head entity, so AI and weapon systems can
+/// address it without walking the `Children` hierarchy.
 #[derive(Component)]
 pub struct TurretParts {
-    pub gun: Entity,
-    pub sensor: Entity,
+    pub head: Entity,
 }
 
-#[derive(Component)]
-pub struct Gun {
-    pub yaw: f32,
-    pub aligned: bool,
-}
-
+/// The turret head: barrel and sensor eye rotate together as one unit.
 #[derive(Component)]
 pub struct Sensor {
     pub yaw: f32,
     pub sweep_dir: f32,
+    /// True while the head points at the acquired target; gates firing.
+    pub aligned: bool,
 }
 
 /// Turret forward is -Z at yaw 0 (facing the spawn edge); yaw rotates around +Y.
@@ -78,8 +74,7 @@ pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKi
         TurretKind::Laser => assets.laser_base_material.clone(),
     };
 
-    let mut gun = Entity::PLACEHOLDER;
-    let mut sensor = Entity::PLACEHOLDER;
+    let mut head = Entity::PLACEHOLDER;
 
     let mut root = commands.spawn((
         kind,
@@ -117,10 +112,13 @@ pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKi
             Transform::from_translation(apex),
         ));
 
-        gun = parent
+        // Single head pivot: barrel and sensor eye are siblings on it,
+        // so they always point the same way.
+        head = parent
             .spawn((
-                Gun {
+                Sensor {
                     yaw: 0.0,
+                    sweep_dir: 1.0,
                     aligned: false,
                 },
                 Transform::from_xyz(0.0, GUN_HEIGHT, 0.0),
@@ -132,29 +130,16 @@ pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKi
                     MeshMaterial3d(assets.barrel_material.clone()),
                     Transform::from_xyz(0.0, 0.0, -BARREL_LENGTH / 2.0),
                 ));
-            })
-            .id();
-
-        sensor = parent
-            .spawn((
-                Sensor {
-                    yaw: 0.0,
-                    sweep_dir: 1.0,
-                },
-                Transform::from_xyz(0.0, SENSOR_HEIGHT, 0.0),
-                Visibility::default(),
-            ))
-            .with_children(|pivot| {
                 pivot.spawn((
                     Mesh3d(assets.sensor_mesh.clone()),
                     MeshMaterial3d(assets.sensor_material.clone()),
-                    Transform::default(),
+                    Transform::from_xyz(0.0, SENSOR_HEIGHT - GUN_HEIGHT, 0.0),
                 ));
             })
             .id();
     });
 
-    root.insert(TurretParts { gun, sensor });
+    root.insert(TurretParts { head });
 
     match kind {
         TurretKind::Kinetic => root.insert(KineticWeapon::default()),
@@ -174,10 +159,11 @@ pub fn sweep_sensors(
         if !matches!(ai, TurretAi::LookingForTarget) {
             continue;
         }
-        let Ok((mut sensor, mut transform)) = sensors.get_mut(parts.sensor) else {
+        let Ok((mut sensor, mut transform)) = sensors.get_mut(parts.head) else {
             continue;
         };
 
+        sensor.aligned = false;
         sensor.yaw += sensor.sweep_dir * SWEEP_SPEED * time.delta_secs();
         if sensor.yaw.abs() > SWEEP_LIMIT {
             sensor.yaw = sensor.yaw.clamp(-SWEEP_LIMIT, SWEEP_LIMIT);
@@ -209,7 +195,7 @@ pub fn acquire_and_validate_targets(
             }
         }
 
-        let Ok((mut sensor, mut sensor_transform)) = sensors.get_mut(parts.sensor) else {
+        let Ok((mut sensor, mut sensor_transform)) = sensors.get_mut(parts.head) else {
             continue;
         };
 
@@ -245,7 +231,7 @@ pub fn acquire_and_validate_targets(
             }
         }
 
-        // Track the acquired target: the cone follows it.
+        // Track the acquired target: barrel, eye and cone all follow together.
         if let TurretAi::TargetAcquired(target) = *ai {
             if let Ok((_, enemy_transform, _)) = enemies.get(target) {
                 let to_enemy = enemy_transform.translation - root_pos;
@@ -253,8 +239,11 @@ pub fn acquire_and_validate_targets(
                 let step = SWEEP_SPEED * time.delta_secs();
                 let delta = wrap_angle(target_yaw - sensor.yaw);
                 sensor.yaw = wrap_angle(sensor.yaw + delta.clamp(-step, step));
+                sensor.aligned = wrap_angle(target_yaw - sensor.yaw).abs() < ALIGN_THRESHOLD;
                 sensor_transform.rotation = Quat::from_rotation_y(sensor.yaw);
             }
+        } else {
+            sensor.aligned = false;
         }
     }
 }
@@ -293,39 +282,6 @@ fn has_line_of_sight(
     true
 }
 
-#[allow(clippy::type_complexity)]
-pub fn aim_guns(
-    time: Res<Time>,
-    turrets: Query<(&Transform, &TurretAi, &TurretParts)>,
-    mut guns: Query<(&mut Gun, &mut Transform), (Without<TurretAi>, Without<Enemy>)>,
-    enemies: Query<&Transform, With<Enemy>>,
-) {
-    for (root_transform, ai, parts) in &turrets {
-        let Ok((mut gun, mut gun_transform)) = guns.get_mut(parts.gun) else {
-            continue;
-        };
-
-        let target_transform = match ai {
-            TurretAi::TargetAcquired(target) => enemies.get(*target).ok(),
-            TurretAi::LookingForTarget => None,
-        };
-        let Some(enemy_transform) = target_transform else {
-            gun.aligned = false;
-            continue;
-        };
-
-        let to_enemy = enemy_transform.translation - root_transform.translation;
-        let target_yaw = direction_to_yaw(Vec3::new(to_enemy.x, 0.0, to_enemy.z));
-
-        let step = GUN_TURN_SPEED * time.delta_secs();
-        let delta = wrap_angle(target_yaw - gun.yaw);
-        gun.yaw = wrap_angle(gun.yaw + delta.clamp(-step, step));
-        gun.aligned = wrap_angle(target_yaw - gun.yaw).abs() < ALIGN_THRESHOLD;
-
-        gun_transform.rotation = Quat::from_rotation_y(gun.yaw);
-    }
-}
-
 pub fn draw_sensor_cones(
     mut gizmos: Gizmos,
     turrets: Query<(&Transform, &TurretAi, &TurretParts)>,
@@ -334,7 +290,7 @@ pub fn draw_sensor_cones(
     const ARC_SEGMENTS: usize = 16;
 
     for (root_transform, ai, parts) in &turrets {
-        let Ok(sensor) = sensors.get(parts.sensor) else {
+        let Ok(sensor) = sensors.get(parts.head) else {
             continue;
         };
 

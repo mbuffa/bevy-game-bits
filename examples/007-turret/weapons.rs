@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::config::*;
 use crate::enemy::Enemy;
 use crate::game::{DamageMessage, GameAssets};
-use crate::turret::{yaw_direction, Gun, TurretAi, TurretParts};
+use crate::turret::{yaw_direction, Sensor, TurretAi, TurretParts};
 
 #[derive(Component)]
 pub struct KineticWeapon {
@@ -40,15 +40,15 @@ pub fn fire_kinetic(
     time: Res<Time>,
     assets: Res<GameAssets>,
     mut turrets: Query<(&Transform, &TurretParts, &mut KineticWeapon)>,
-    guns: Query<&Gun>,
+    sensors: Query<&Sensor>,
 ) {
     for (root_transform, parts, mut weapon) in &mut turrets {
-        let Ok(gun) = guns.get(parts.gun) else {
+        let Ok(sensor) = sensors.get(parts.head) else {
             continue;
         };
 
         // Minigun: continuous stream while aimed; the stream pauses with the aim.
-        if !gun.aligned {
+        if !sensor.aligned {
             continue;
         }
 
@@ -58,7 +58,7 @@ pub fn fire_kinetic(
                 &mut commands,
                 &assets,
                 root_transform.translation,
-                gun.yaw,
+                sensor.yaw,
                 tracer,
             );
             weapon.rounds_fired += 1;
@@ -105,7 +105,7 @@ pub fn fire_lasers(
     time: Res<Time>,
     mut writer: MessageWriter<DamageMessage>,
     mut turrets: Query<(&TurretAi, &TurretParts, &mut LaserWeapon)>,
-    guns: Query<&Gun>,
+    sensors: Query<&Sensor>,
 ) {
     for (ai, parts, mut laser) in &mut turrets {
         laser.firing_at = None;
@@ -113,11 +113,11 @@ pub fn fire_lasers(
         let TurretAi::TargetAcquired(target) = ai else {
             continue;
         };
-        let Ok(gun) = guns.get(parts.gun) else {
+        let Ok(sensor) = sensors.get(parts.head) else {
             continue;
         };
 
-        if gun.aligned {
+        if sensor.aligned {
             // Damage-per-second, frame-rate independent.
             writer.write(DamageMessage {
                 target: *target,
@@ -131,19 +131,21 @@ pub fn fire_lasers(
 pub fn draw_laser_beams(
     mut gizmos: Gizmos,
     turrets: Query<(&Transform, &TurretParts, &LaserWeapon)>,
-    guns: Query<&Gun>,
+    sensors: Query<&Sensor>,
     enemies: Query<&Transform, With<Enemy>>,
 ) {
     for (root_transform, parts, laser) in &turrets {
         let Some(target) = laser.firing_at else {
             continue;
         };
-        let (Ok(gun), Ok(enemy_transform)) = (guns.get(parts.gun), enemies.get(target)) else {
+        let (Ok(sensor), Ok(enemy_transform)) = (sensors.get(parts.head), enemies.get(target))
+        else {
             continue;
         };
 
-        let muzzle =
-            root_transform.translation + Vec3::Y * GUN_HEIGHT + yaw_direction(gun.yaw) * BARREL_LENGTH;
+        let muzzle = root_transform.translation
+            + Vec3::Y * GUN_HEIGHT
+            + yaw_direction(sensor.yaw) * BARREL_LENGTH;
         gizmos.line(muzzle, enemy_transform.translation, LASER_BEAM_COLOR);
     }
 }

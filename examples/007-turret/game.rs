@@ -53,7 +53,6 @@ impl Plugin for GamePlugin {
                     enemy::spawn_waves,
                     turret::sweep_sensors,
                     turret::acquire_and_validate_targets,
-                    turret::aim_guns,
                     weapons::fire_kinetic,
                     weapons::fire_lasers,
                     enemy::apply_damage,

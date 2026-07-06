@@ -30,7 +30,6 @@ pub const SENSOR_RANGE: f32 = 24.0;
 pub const CONE_HALF_ANGLE: f32 = 8.0 * PI / 180.0;
 pub const SWEEP_LIMIT: f32 = FRAC_PI_3; // +/- 60 degrees around facing
 pub const SWEEP_SPEED: f32 = 65.0 * PI / 180.0;
-pub const GUN_TURN_SPEED: f32 = 65.0 * PI / 180.0;
 pub const ALIGN_THRESHOLD: f32 = 0.05; // ~3 degrees
 
 pub const TRIPOD_APEX_HEIGHT: f32 = 0.85;
