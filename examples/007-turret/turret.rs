@@ -294,7 +294,7 @@ pub fn draw_sensor_cones(
             continue;
         };
 
-        let apex = root_transform.translation + Vec3::Y * 0.15;
+        let apex = root_transform.translation + Vec3::Y * GUN_HEIGHT;
         let reloading = kinetic.is_some_and(KineticWeapon::is_reloading);
         let color = if reloading {
             CONE_RELOAD_COLOR
