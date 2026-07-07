@@ -284,20 +284,25 @@ fn has_line_of_sight(
 
 pub fn draw_sensor_cones(
     mut gizmos: Gizmos,
-    turrets: Query<(&Transform, &TurretAi, &TurretParts)>,
+    turrets: Query<(&Transform, &TurretAi, &TurretParts, Option<&KineticWeapon>)>,
     sensors: Query<&Sensor>,
 ) {
     const ARC_SEGMENTS: usize = 16;
 
-    for (root_transform, ai, parts) in &turrets {
+    for (root_transform, ai, parts, kinetic) in &turrets {
         let Ok(sensor) = sensors.get(parts.head) else {
             continue;
         };
 
         let apex = root_transform.translation + Vec3::Y * 0.15;
-        let color = match ai {
-            TurretAi::LookingForTarget => CONE_SEARCH_COLOR,
-            TurretAi::TargetAcquired(_) => CONE_LOCKED_COLOR,
+        let reloading = kinetic.is_some_and(KineticWeapon::is_reloading);
+        let color = if reloading {
+            CONE_RELOAD_COLOR
+        } else {
+            match ai {
+                TurretAi::LookingForTarget => CONE_SEARCH_COLOR,
+                TurretAi::TargetAcquired(_) => CONE_LOCKED_COLOR,
+            }
         };
 
         let arc = (0..=ARC_SEGMENTS).map(|i| {

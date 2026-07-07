@@ -74,7 +74,7 @@ pub fn setup(
     }
 
     commands.spawn((
-        Text::new("LMB: kinetic turret  |  RMB: laser turret"),
+        Text::new("LMB: kinetic turret (20)  |  RMB: laser turret (40)  |  Space: start wave  |  R: restart"),
         TextFont::from_font_size(16.0),
         TextColor(Color::WHITE),
         Node {

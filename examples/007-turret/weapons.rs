@@ -10,6 +10,9 @@ pub struct KineticWeapon {
     pub shot_timer: Timer,
     /// Total rounds fired, drives the every-Nth tracer cadence.
     pub rounds_fired: u32,
+    pub rounds_in_mag: u32,
+    /// `Some` while reloading; the turret can't fire until it finishes.
+    pub reload_timer: Option<Timer>,
 }
 
 impl Default for KineticWeapon {
@@ -17,7 +20,15 @@ impl Default for KineticWeapon {
         Self {
             shot_timer: Timer::from_seconds(MINIGUN_SHOT_INTERVAL, TimerMode::Repeating),
             rounds_fired: 0,
+            rounds_in_mag: MAG_SIZE,
+            reload_timer: None,
         }
+    }
+}
+
+impl KineticWeapon {
+    pub fn is_reloading(&self) -> bool {
+        self.reload_timer.is_some()
     }
 }
 
@@ -43,6 +54,17 @@ pub fn fire_kinetic(
     sensors: Query<&Sensor>,
 ) {
     for (root_transform, parts, mut weapon) in &mut turrets {
+        // Reload progresses unconditionally — even without a target — so a
+        // turret never comes back to a fight with an empty magazine.
+        if let Some(reload) = &mut weapon.reload_timer {
+            if reload.tick(time.delta()).is_finished() {
+                weapon.rounds_in_mag = MAG_SIZE;
+                weapon.reload_timer = None;
+            } else {
+                continue;
+            }
+        }
+
         let Ok(sensor) = sensors.get(parts.head) else {
             continue;
         };
@@ -62,6 +84,11 @@ pub fn fire_kinetic(
                 tracer,
             );
             weapon.rounds_fired += 1;
+            weapon.rounds_in_mag -= 1;
+            if weapon.rounds_in_mag == 0 {
+                weapon.reload_timer =
+                    Some(Timer::from_seconds(RELOAD_SECONDS, TimerMode::Once));
+            }
         }
     }
 }

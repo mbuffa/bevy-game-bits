@@ -2,11 +2,14 @@ use bevy::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::*;
-use crate::game::{DamageMessage, GameAssets};
+use crate::game::{DamageMessage, EnemyResolved, GameAssets};
+use crate::waves::{EnemyArchetype, WAVES};
 
 #[derive(Component)]
 pub struct Enemy {
     pub radius: f32,
+    /// Base HP lost if this enemy leaks past the near edge.
+    pub leak_cost: u32,
 }
 
 #[derive(Component)]
@@ -25,8 +28,27 @@ pub struct HitFlash {
     pub original: MeshMaterial3d<StandardMaterial>,
 }
 
-#[derive(Resource)]
-pub struct WaveTimer(pub Timer);
+/// Playback state of the current wave's spawn schedule, plus the spawned /
+/// resolved tally that decides when the wave is over. Reset by `start_wave`
+/// on entering `WaveActive`.
+#[derive(Resource, Default)]
+pub struct ActiveWave {
+    pub elapsed: f32,
+    /// Enemies spawned so far per group, parallel to `WAVES[wave].groups`.
+    pub cursors: Vec<u32>,
+    pub spawned: u32,
+    pub resolved: u32,
+}
+
+impl ActiveWave {
+    pub fn all_spawned(&self, wave: usize) -> bool {
+        WAVES[wave]
+            .groups
+            .iter()
+            .zip(&self.cursors)
+            .all(|(group, cursor)| *cursor >= group.count)
+    }
+}
 
 /// Minimal xorshift64* PRNG, so the example needs no extra dependency.
 #[derive(Resource)]
@@ -50,58 +72,67 @@ impl SimpleRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
 
-    pub fn range_u32(&mut self, low: u32, high_inclusive: u32) -> u32 {
-        low + (self.next_u64() >> 33) as u32 % (high_inclusive - low + 1)
-    }
-
     pub fn range_f32(&mut self, low: f32, high: f32) -> f32 {
         let unit = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
         low + unit * (high - low)
     }
 }
 
-pub fn spawn_waves(
+/// Play back the current wave's spawn schedule. The while-loop catches up
+/// after frame hitches and supports `interval: 0.0` (whole group at once).
+pub fn spawn_wave_enemies(
     mut commands: Commands,
     time: Res<Time>,
-    mut timer: ResMut<WaveTimer>,
+    mut wave: ResMut<ActiveWave>,
+    current: Res<crate::game::CurrentWave>,
     mut rng: ResMut<SimpleRng>,
     assets: Res<GameAssets>,
 ) {
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
+    wave.elapsed += time.delta_secs();
 
-    let count = rng.range_u32(WAVE_MIN_ENEMIES, WAVE_MAX_ENEMIES);
-
-    for i in 0..count {
-        let x = -FIELD_WIDTH / 2.0 + FIELD_WIDTH * (i as f32 + 0.5) / count as f32;
-
-        commands.spawn((
-            Enemy {
-                radius: ENEMY_RADIUS,
-            },
-            Health {
-                current: ENEMY_MAX_HP,
-            },
-            Velocity(Vec3::Z * ENEMY_SPEED),
-            Mesh3d(assets.enemy_mesh.clone()),
-            MeshMaterial3d(assets.enemy_material.clone()),
-            Transform::from_xyz(x, ENEMY_SIZE.y / 2.0, -FIELD_DEPTH / 2.0),
-        ));
+    for (i, group) in WAVES[current.0].groups.iter().enumerate() {
+        while wave.cursors[i] < group.count
+            && wave.elapsed >= group.start_delay + wave.cursors[i] as f32 * group.interval
+        {
+            let x = rng.range_f32(-FIELD_WIDTH / 2.0 + 1.0, FIELD_WIDTH / 2.0 - 1.0);
+            spawn_enemy(&mut commands, &assets, group.archetype, x);
+            wave.cursors[i] += 1;
+            wave.spawned += 1;
+        }
     }
 }
 
-pub fn move_enemies(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut enemies: Query<(Entity, &mut Transform, &Velocity), With<Enemy>>,
-) {
-    for (entity, mut transform, velocity) in &mut enemies {
-        transform.translation += velocity.0 * time.delta_secs();
+fn spawn_enemy(commands: &mut Commands, assets: &GameAssets, archetype: EnemyArchetype, x: f32) {
+    let stats = archetype.stats();
+    let material = match archetype {
+        EnemyArchetype::Grunt => assets.enemy_material.clone(),
+        EnemyArchetype::Runner => assets.runner_material.clone(),
+        EnemyArchetype::Brute => assets.brute_material.clone(),
+    };
 
-        if transform.translation.z > FIELD_DEPTH / 2.0 + ENEMY_RADIUS {
-            commands.entity(entity).despawn();
-        }
+    commands.spawn((
+        Enemy {
+            radius: ENEMY_RADIUS * stats.scale,
+            leak_cost: stats.leak_cost,
+        },
+        Health { current: stats.hp },
+        Velocity(Vec3::Z * stats.speed),
+        Mesh3d(assets.enemy_mesh.clone()),
+        MeshMaterial3d(material),
+        Transform {
+            translation: Vec3::new(x, ENEMY_SIZE.y / 2.0 * stats.scale, -FIELD_DEPTH / 2.0),
+            scale: Vec3::splat(stats.scale),
+            ..default()
+        },
+    ));
+}
+
+pub fn move_enemies(
+    time: Res<Time>,
+    mut enemies: Query<(&mut Transform, &Velocity), With<Enemy>>,
+) {
+    for (mut transform, velocity) in &mut enemies {
+        transform.translation += velocity.0 * time.delta_secs();
     }
 }
 
@@ -157,10 +188,27 @@ pub fn update_hit_flash(
     }
 }
 
-pub fn despawn_dead(mut commands: Commands, enemies: Query<(Entity, &Health), With<Enemy>>) {
-    for (entity, health) in &enemies {
+/// The single place enemies leave the field: dead first, then leaked. Exactly
+/// one `EnemyResolved` per enemy keeps the wave-end tally correct — never
+/// despawn enemies anywhere else.
+pub fn resolve_enemies(
+    mut commands: Commands,
+    mut writer: MessageWriter<EnemyResolved>,
+    enemies: Query<(Entity, &Health, &Transform, &Enemy)>,
+) {
+    for (entity, health, transform, enemy) in &enemies {
         if health.current <= 0.0 {
             commands.entity(entity).despawn();
+            writer.write(EnemyResolved {
+                leaked: false,
+                leak_cost: 0,
+            });
+        } else if transform.translation.z > FIELD_DEPTH / 2.0 + enemy.radius {
+            commands.entity(entity).despawn();
+            writer.write(EnemyResolved {
+                leaked: true,
+                leak_cost: enemy.leak_cost,
+            });
         }
     }
 }

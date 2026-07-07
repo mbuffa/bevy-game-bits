@@ -6,16 +6,21 @@ use std::f32::consts::{FRAC_PI_3, PI};
 pub const FIELD_WIDTH: f32 = 40.0;
 pub const FIELD_DEPTH: f32 = 30.0;
 
-/// Bounding radius used for targeting, line-of-sight and projectile hits.
+/// Bounding radius used for targeting, line-of-sight and projectile hits,
+/// scaled per archetype (see `waves.rs`).
 pub const ENEMY_RADIUS: f32 = 0.5;
-/// Visual cuboid dimensions of a target.
+/// Visual cuboid dimensions of a target at scale 1.0.
 pub const ENEMY_SIZE: Vec3 = Vec3::new(1.0, 0.5, 0.7);
-pub const ENEMY_SPEED: f32 = 2.0;
-pub const ENEMY_MAX_HP: f32 = 100.0;
 
-pub const WAVE_INTERVAL: f32 = 2.0;
-pub const WAVE_MIN_ENEMIES: u32 = 1;
-pub const WAVE_MAX_ENEMIES: u32 = 9;
+/// Intermission between waves; Space skips it.
+pub const BUILD_PHASE_SECONDS: f32 = 12.0;
+
+/// Leaked enemies deduct their `leak_cost` from this; 0 = defeat.
+pub const BASE_HP: u32 = 10;
+
+pub const START_MATERIALS: u32 = 100;
+pub const KINETIC_COST: u32 = 20;
+pub const LASER_COST: u32 = 40;
 
 pub const PROJECTILE_SPEED: f32 = 20.0;
 pub const PROJECTILE_RADIUS: f32 = 0.08;
@@ -23,6 +28,8 @@ pub const PROJECTILE_RADIUS: f32 = 0.08;
 pub const MINIGUN_SHOT_INTERVAL: f32 = 0.1; // 10 rounds/s while aligned
 pub const MINIGUN_DAMAGE: f32 = 5.0;
 pub const TRACER_EVERY: u32 = 4; // every Nth round is a visible tracer
+pub const MAG_SIZE: u32 = 30;
+pub const RELOAD_SECONDS: f32 = 2.5;
 
 pub const LASER_DPS: f32 = 120.0;
 
@@ -48,6 +55,8 @@ pub const GROUND_COLOR: Color = Color::srgb(0.71, 0.38, 0.24);
 pub const ROCK_COLOR_A: Color = Color::srgb(0.48, 0.23, 0.15);
 pub const ROCK_COLOR_B: Color = Color::srgb(0.55, 0.30, 0.20);
 pub const ENEMY_COLOR: Color = Color::srgb(0.16, 0.34, 0.30);
+pub const RUNNER_COLOR: Color = Color::srgb(0.55, 0.62, 0.18);
+pub const BRUTE_COLOR: Color = Color::srgb(0.45, 0.10, 0.10);
 pub const LEG_COLOR: Color = Color::srgb(0.16, 0.16, 0.19);
 pub const KINETIC_BASE_COLOR: Color = Color::srgb(0.35, 0.38, 0.42);
 pub const LASER_BASE_COLOR: Color = Color::srgb(0.16, 0.55, 0.55);
@@ -58,3 +67,4 @@ pub const TRACER_LIGHT_COLOR: Color = Color::srgb(1.0, 0.55, 0.15);
 pub const LASER_BEAM_COLOR: Color = Color::srgb(1.0, 0.2, 0.2);
 pub const CONE_SEARCH_COLOR: Color = Color::srgba(0.3, 1.0, 0.4, 0.6);
 pub const CONE_LOCKED_COLOR: Color = Color::srgba(1.0, 0.6, 0.15, 0.8);
+pub const CONE_RELOAD_COLOR: Color = Color::srgba(0.6, 0.6, 0.6, 0.5);

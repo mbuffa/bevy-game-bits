@@ -3,9 +3,11 @@ use bevy::prelude::*;
 mod config;
 mod enemy;
 mod game;
+mod hud;
 mod placement;
 mod scene;
 mod turret;
+mod waves;
 mod weapons;
 
 use config::CLEAR_COLOR;

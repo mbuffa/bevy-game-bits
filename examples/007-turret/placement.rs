@@ -1,13 +1,15 @@
 use bevy::prelude::*;
 
 use crate::config::*;
-use crate::game::GameAssets;
+use crate::game::{GameAssets, Materials, PlacementRejected};
 use crate::turret::{self, TurretKind};
 
 pub fn place_turret_on_click(
     mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     assets: Res<GameAssets>,
+    mut materials: ResMut<Materials>,
+    mut rejected: MessageWriter<PlacementRejected>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) -> Result {
@@ -18,6 +20,15 @@ pub fn place_turret_on_click(
     } else {
         return Ok(());
     };
+
+    let cost = match kind {
+        TurretKind::Kinetic => KINETIC_COST,
+        TurretKind::Laser => LASER_COST,
+    };
+    if materials.0 < cost {
+        rejected.write(PlacementRejected);
+        return Ok(());
+    }
 
     let (camera, camera_transform) = *camera;
     let Some(cursor) = window.cursor_position() else {
@@ -36,6 +47,7 @@ pub fn place_turret_on_click(
         hit.z.clamp(-FIELD_DEPTH / 2.0 + 1.0, FIELD_DEPTH / 2.0 - 1.0),
     );
 
+    materials.0 -= cost;
     turret::spawn_turret(&mut commands, &assets, kind, position);
 
     Ok(())
