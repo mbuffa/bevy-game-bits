@@ -1,15 +1,18 @@
 use bevy::prelude::*;
 
+use crate::audio::{PlaySfx, Sfx};
 use crate::config::*;
 use crate::game::{GameAssets, Materials, PlacementRejected};
 use crate::turret::{self, TurretKind};
 
+#[allow(clippy::too_many_arguments)]
 pub fn place_turret_on_click(
     mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     assets: Res<GameAssets>,
     mut materials: ResMut<Materials>,
     mut rejected: MessageWriter<PlacementRejected>,
+    mut sfx: MessageWriter<PlaySfx>,
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) -> Result {
@@ -42,13 +45,16 @@ pub fn place_turret_on_click(
     let hit = ray.get_point(t);
 
     let position = Vec3::new(
-        hit.x.clamp(-FIELD_WIDTH / 2.0 + 1.0, FIELD_WIDTH / 2.0 - 1.0),
+        hit.x
+            .clamp(-FIELD_WIDTH / 2.0 + 1.0, FIELD_WIDTH / 2.0 - 1.0),
         0.0,
-        hit.z.clamp(-FIELD_DEPTH / 2.0 + 1.0, FIELD_DEPTH / 2.0 - 1.0),
+        hit.z
+            .clamp(-FIELD_DEPTH / 2.0 + 1.0, FIELD_DEPTH / 2.0 - 1.0),
     );
 
     materials.0 -= cost;
     turret::spawn_turret(&mut commands, &assets, kind, position);
+    sfx.write(PlaySfx(Sfx::TurretPlaced));
 
     Ok(())
 }

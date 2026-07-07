@@ -56,7 +56,12 @@ pub struct WaveDef {
     pub reward: u32,
 }
 
-const fn group(archetype: EnemyArchetype, count: u32, start_delay: f32, interval: f32) -> SpawnGroup {
+const fn group(
+    archetype: EnemyArchetype,
+    count: u32,
+    start_delay: f32,
+    interval: f32,
+) -> SpawnGroup {
     SpawnGroup {
         archetype,
         count,

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::audio::{PlaySfx, Sfx};
 use crate::config::*;
 use crate::game::{DamageMessage, EnemyResolved, GameAssets};
 use crate::waves::{EnemyArchetype, WAVES};
@@ -127,10 +128,7 @@ fn spawn_enemy(commands: &mut Commands, assets: &GameAssets, archetype: EnemyArc
     ));
 }
 
-pub fn move_enemies(
-    time: Res<Time>,
-    mut enemies: Query<(&mut Transform, &Velocity), With<Enemy>>,
-) {
+pub fn move_enemies(time: Res<Time>, mut enemies: Query<(&mut Transform, &Velocity), With<Enemy>>) {
     for (mut transform, velocity) in &mut enemies {
         transform.translation += velocity.0 * time.delta_secs();
     }
@@ -194,6 +192,7 @@ pub fn update_hit_flash(
 pub fn resolve_enemies(
     mut commands: Commands,
     mut writer: MessageWriter<EnemyResolved>,
+    mut sfx: MessageWriter<PlaySfx>,
     enemies: Query<(Entity, &Health, &Transform, &Enemy)>,
 ) {
     for (entity, health, transform, enemy) in &enemies {
@@ -203,6 +202,8 @@ pub fn resolve_enemies(
                 leaked: false,
                 leak_cost: 0,
             });
+            // Leaks stay silent: the base HP drop is the feedback.
+            sfx.write(PlaySfx(Sfx::EnemyDestroyed));
         } else if transform.translation.z > FIELD_DEPTH / 2.0 + enemy.radius {
             commands.entity(entity).despawn();
             writer.write(EnemyResolved {

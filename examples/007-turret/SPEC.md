@@ -92,6 +92,24 @@ pairs sandwiching a dense grunt/runner rush.
 | `Space` | Start the wave early         |
 | `R`     | Restart (from Victory/Defeat) |
 
+## Audio
+
+Gameplay systems emit `PlaySfx` messages; `audio.rs` owns all playback. Every
+sound below currently maps to a jsfxr placeholder blip (`assets/sfx/jsfxr/`) —
+swap the paths in `Sfx::path()` when real assets exist.
+
+| Sfx | Trigger | Placeholder | Notes |
+|-----|---------|-------------|-------|
+| TurretPlaced | successful placement | click.wav | |
+| WaveStart | wave begins | weepwoop.wav | |
+| BuildPhase | build phase begins (incl. game start/restart) | cute.wav | |
+| MaterialsGained | wave reward granted | pickup.wav | skipped when reward is 0 |
+| KineticShot | each kinetic round | click2.wav | volume 0.3; throttle to tracer cadence if too dense |
+| LaserBeam | beam on target | leaves.wav | looped child of the turret; stops with the beam |
+| EnemyDestroyed | enemy killed | impact.wav | leaks stay silent (base HP drop is the feedback) |
+| Victory | all 10 waves cleared | pickup.wav | needs a dedicated asset |
+| Defeat | base HP reaches 0 | impact.wav | needs a dedicated asset |
+
 ## Tuning
 
 Every number above lives in `config.rs` or `waves.rs` as a constant. This table

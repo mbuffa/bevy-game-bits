@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::{self, PlaySfx, Sfx};
 use crate::config::*;
 use crate::enemy::{self, ActiveWave, SimpleRng};
 use crate::waves::WAVES;
@@ -104,6 +105,7 @@ impl Plugin for GamePlugin {
             .add_message::<DamageMessage>()
             .add_message::<EnemyResolved>()
             .add_message::<PlacementRejected>()
+            .add_message::<PlaySfx>()
             .insert_resource(SimpleRng::from_time())
             .init_resource::<CurrentWave>()
             .init_resource::<ActiveWave>()
@@ -113,7 +115,10 @@ impl Plugin for GamePlugin {
                 BUILD_PHASE_SECONDS,
                 TimerMode::Once,
             )))
-            .add_systems(Startup, (setup_assets, scene::setup, hud::setup).chain())
+            .add_systems(
+                Startup,
+                (setup_assets, scene::setup, hud::setup, audio::load_sfx).chain(),
+            )
             .add_systems(OnEnter(GamePhase::Building), reset_build_timer)
             .add_systems(OnEnter(GamePhase::WaveActive), start_wave)
             .add_systems(
@@ -156,6 +161,8 @@ impl Plugin for GamePlugin {
                     hud::update_base_hp,
                     hud::update_status,
                     restart,
+                    audio::play_sfx,
+                    audio::update_laser_loops,
                 ),
             )
             .add_systems(
@@ -179,8 +186,9 @@ impl Plugin for GamePlugin {
     }
 }
 
-fn reset_build_timer(mut timer: ResMut<BuildTimer>) {
+fn reset_build_timer(mut timer: ResMut<BuildTimer>, mut sfx: MessageWriter<PlaySfx>) {
     timer.0.reset();
+    sfx.write(PlaySfx(Sfx::BuildPhase));
 }
 
 fn tick_build_phase(
@@ -194,11 +202,16 @@ fn tick_build_phase(
     }
 }
 
-fn start_wave(current: Res<CurrentWave>, mut wave: ResMut<ActiveWave>) {
+fn start_wave(
+    current: Res<CurrentWave>,
+    mut wave: ResMut<ActiveWave>,
+    mut sfx: MessageWriter<PlaySfx>,
+) {
     *wave = ActiveWave {
         cursors: vec![0; WAVES[current.0].groups.len()],
         ..default()
     };
+    sfx.write(PlaySfx(Sfx::WaveStart));
 }
 
 /// Runs before `check_wave_end` so a leak that empties the base wins the
@@ -221,11 +234,13 @@ fn apply_base_damage(
 
 /// A wave ends when its schedule is exhausted and every spawned enemy has
 /// been resolved (killed or leaked).
+#[allow(clippy::too_many_arguments)]
 fn check_wave_end(
     mut resolved: MessageReader<EnemyResolved>,
     mut wave: ResMut<ActiveWave>,
     mut current: ResMut<CurrentWave>,
     mut materials: ResMut<Materials>,
+    mut sfx: MessageWriter<PlaySfx>,
     base: Res<BaseHealth>,
     state: Res<State<GamePhase>>,
     mut next: ResMut<NextState<GamePhase>>,
@@ -240,7 +255,11 @@ fn check_wave_end(
         return;
     }
 
-    materials.0 += WAVES[current.0].reward;
+    let reward = WAVES[current.0].reward;
+    if reward > 0 {
+        materials.0 += reward;
+        sfx.write(PlaySfx(Sfx::MaterialsGained));
+    }
     current.0 += 1;
     if current.0 >= WAVES.len() {
         next.set(GamePhase::Victory);

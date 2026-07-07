@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::{PlaySfx, Sfx};
 use crate::config::*;
 use crate::enemy::ActiveWave;
 use crate::game::{BaseHealth, BuildTimer, CurrentWave, GamePhase, Materials, PlacementRejected};
@@ -81,10 +82,7 @@ pub fn update_materials(
     };
 }
 
-pub fn update_base_hp(
-    base: Res<BaseHealth>,
-    mut text: Single<&mut Text, With<BaseHpText>>,
-) {
+pub fn update_base_hp(base: Res<BaseHealth>, mut text: Single<&mut Text, With<BaseHpText>>) {
     text.0 = format!("Base HP: {}/{}", base.0, BASE_HP);
 }
 
@@ -127,12 +125,13 @@ fn pending_spawns(wave: &ActiveWave, current: usize) -> u32 {
 }
 
 /// Big centered end-screen banner; `DespawnOnExit` removes it on restart.
-pub fn spawn_banner(phase: GamePhase) -> impl Fn(Commands) {
-    move |mut commands: Commands| {
-        let (message, color) = match phase {
-            GamePhase::Victory => ("VICTORY", Color::srgb(0.4, 1.0, 0.5)),
-            _ => ("DEFEAT", Color::srgb(1.0, 0.3, 0.3)),
+pub fn spawn_banner(phase: GamePhase) -> impl Fn(Commands, MessageWriter<PlaySfx>) {
+    move |mut commands: Commands, mut sfx: MessageWriter<PlaySfx>| {
+        let (message, color, sound) = match phase {
+            GamePhase::Victory => ("VICTORY", Color::srgb(0.4, 1.0, 0.5), Sfx::Victory),
+            _ => ("DEFEAT", Color::srgb(1.0, 0.3, 0.3), Sfx::Defeat),
         };
+        sfx.write(PlaySfx(sound));
 
         commands
             .spawn((

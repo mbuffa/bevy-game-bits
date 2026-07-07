@@ -68,7 +68,12 @@ pub fn ray_sphere_intersect(origin: Vec3, dir: Vec3, center: Vec3, radius: f32) 
     (t >= 0.0).then_some(t)
 }
 
-pub fn spawn_turret(commands: &mut Commands, assets: &GameAssets, kind: TurretKind, position: Vec3) {
+pub fn spawn_turret(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    kind: TurretKind,
+    position: Vec3,
+) {
     let base_material = match kind {
         TurretKind::Kinetic => assets.kinetic_base_material.clone(),
         TurretKind::Laser => assets.laser_base_material.clone(),
@@ -271,7 +276,8 @@ fn has_line_of_sight(
         if other == target {
             continue;
         }
-        if let Some(t) = ray_sphere_intersect(origin, dir, other_transform.translation, other_enemy.radius)
+        if let Some(t) =
+            ray_sphere_intersect(origin, dir, other_transform.translation, other_enemy.radius)
         {
             if t < distance - 0.01 {
                 return false;

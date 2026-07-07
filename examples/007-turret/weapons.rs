@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::audio::{PlaySfx, Sfx};
 use crate::config::*;
 use crate::enemy::Enemy;
 use crate::game::{DamageMessage, GameAssets};
@@ -50,6 +51,7 @@ pub fn fire_kinetic(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<GameAssets>,
+    mut sfx: MessageWriter<PlaySfx>,
     mut turrets: Query<(&Transform, &TurretParts, &mut KineticWeapon)>,
     sensors: Query<&Sensor>,
 ) {
@@ -83,11 +85,11 @@ pub fn fire_kinetic(
                 sensor.yaw,
                 tracer,
             );
+            sfx.write(PlaySfx(Sfx::KineticShot));
             weapon.rounds_fired += 1;
             weapon.rounds_in_mag -= 1;
             if weapon.rounds_in_mag == 0 {
-                weapon.reload_timer =
-                    Some(Timer::from_seconds(RELOAD_SECONDS, TimerMode::Once));
+                weapon.reload_timer = Some(Timer::from_seconds(RELOAD_SECONDS, TimerMode::Once));
             }
         }
     }
