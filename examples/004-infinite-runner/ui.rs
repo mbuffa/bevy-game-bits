@@ -24,7 +24,10 @@ pub struct HitSpaceText;
 #[derive(Resource)]
 pub struct WindowSize(pub f32, pub f32);
 
-pub fn update_score_text(score_text: Single<&mut Text, With<ScoreText>>, score: Res<Score>) -> Result {
+pub fn update_score_text(
+    score_text: Single<&mut Text, With<ScoreText>>,
+    score: Res<Score>,
+) -> Result {
     let mut text = score_text.into_inner();
     text.0 = score.0.to_string();
 

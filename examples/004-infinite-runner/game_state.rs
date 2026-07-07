@@ -67,7 +67,11 @@ impl Plugin for GameStatePlugin {
     }
 }
 
-fn setup(window_size: Res<WindowSize>, mut window: Single<&mut Window>, mut commands: Commands) -> Result {
+fn setup(
+    window_size: Res<WindowSize>,
+    mut window: Single<&mut Window>,
+    mut commands: Commands,
+) -> Result {
     window.resolution.set(window_size.0, window_size.1);
 
     // Camera
