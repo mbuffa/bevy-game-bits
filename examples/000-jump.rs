@@ -74,7 +74,10 @@ fn handle_jumping_state(
     Ok(())
 }
 
-fn update_player_velocity(mut query: Query<&mut JumpingState, With<Player>>, time: Res<Time>) -> Result {
+fn update_player_velocity(
+    mut query: Query<&mut JumpingState, With<Player>>,
+    time: Res<Time>,
+) -> Result {
     let tt = time.elapsed_secs();
 
     let mut jumping_state = query.single_mut()?;
@@ -101,7 +104,9 @@ fn update_player_velocity(mut query: Query<&mut JumpingState, With<Player>>, tim
     Ok(())
 }
 
-fn update_player_transform(mut query: Query<(&mut Transform, &JumpingState), With<Player>>) -> Result {
+fn update_player_transform(
+    mut query: Query<(&mut Transform, &JumpingState), With<Player>>,
+) -> Result {
     let (mut transform, jumping_state) = query.single_mut()?;
 
     if transform.translation.y < 0.0 {
