@@ -29,6 +29,22 @@ serde_json = "1"
 # `serde_json` was already here for 009-derby's exporter; this promotes the
 # `serde` core crate (already in the lock transitively) to a direct dep.
 serde = { version = "1", features = ["derive"] }
+# TrenchBroom/Quake map loading, used by examples/010-immersive.
+# Pinned to 0.13: 0.14 requires Bevy 0.19 + Avian 0.7. The crate's own
+# `avian_f32` feature would drag in Avian *0.5* and conflict with our 0.6, so
+# we take the `physics-integration` route (no physics deps) and get the
+# Avian 0.6 backend from the companion crate below instead.
+bevy_trenchbroom = { version = "0.13", features = ["bsp", "physics-integration"] }
+# Official Avian PhysicsBackend impl for bevy_trenchbroom. 0.13.0-rc.1 is the
+# newest published version and the one that targets Avian ^0.6.0-rc.1 (its
+# Cargo.toml, not its readme table, is authoritative here).
+bevy_trenchbroom_avian = "0.13.0-rc.1"
+# First-person kinematic character controller, used by examples/010-immersive.
+bevy_ahoy = { version = "0.1", default-features = false }
+# bevy_ahoy binds its actions through bevy_enhanced_input; pin the caret at
+# 0.24 since that's what bevy_ahoy 0.1 requires — floating to 0.25 would
+# resolve two copies of the crate instead of sharing one.
+bevy_enhanced_input = "0.24"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
