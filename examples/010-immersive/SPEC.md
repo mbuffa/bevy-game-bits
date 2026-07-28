@@ -151,7 +151,7 @@ ericw-tools isn't in Homebrew — it has to be built from source (no prebuilt re
 - `assets/maps/immersive/test_bsp_source.map` is a **separate** generator output: the same room, plus a `light` entity and an `info_player_start` (qbsp's leak-fill occupant — the literal classname matters here, but our own `player_spawn` also has to be present alongside it or nothing spawns a camera and the screen goes solid black instead of white). This compiles to `assets/maps/immersive/test.bsp`. Toggle `config::MAP_PATH` between the two to switch which one the example loads.
 - **Critical:** use `-qbism` (Quake 2 BSP38). Plain Q1 BSP strips brushes unless compiled with `-wrbrushesonly`, and `convex_collider()` would find nothing — the player falls forever.
 
-Commands actually run:
+`examples/010-immersive/Makefile` wraps the two commands (`make bsp`, or `make clean-bsp` to remove the `.bsp` + byproducts). ericw-tools isn't on PATH, so override on the command line: `make bsp QBSP=/path/to/qbsp LIGHT=/path/to/light`. Proper `make` dependency tracking — running `make bsp` again with nothing changed is a no-op. Equivalent to running directly:
 ```
 qbsp  -qbism -nosubdivide -nosoftware -path assets -notex \
       assets/maps/immersive/test_bsp_source.map assets/maps/immersive/test.bsp
@@ -159,7 +159,7 @@ light -wrnormals -extra4 -lightgrid -path assets \
       -bounce 8 -bouncecolorscale 1 -bouncestyled 1 -dirt 1 -phong 1 \
       assets/maps/immersive/test.bsp
 ```
-qbsp produces `test.log`/`test-light.log`/`test.prt`/`test.content.json`/`test.texinfo.json` as compile byproducts alongside the `.bsp` — deleted after each compile, not checked in (only `test.bsp` matters at runtime, and it's already LFS-tracked via `.gitattributes`).
+qbsp produces `test.log`/`test-light.log`/`test.prt`/`test.content.json`/`test.texinfo.json` as compile byproducts alongside the `.bsp` — the Makefile deletes these automatically after each build; not checked in (only `test.bsp` matters at runtime, and it's already LFS-tracked via `.gitattributes`).
 
 **Verified (2026-07-28):** qbsp reported `1 player-occupiable leaves` (sealed, no leak) and no warnings; `light` completed with a populated lightgrid (`2048 grid nodes`) and no errors. Switched `config::MAP_PATH` to `test.bsp` temporarily and ran with `IMMERSIVE_SHOTS=1` (and separately with the full autopilot+telemetry harness):
 - **The Phase 1 point-light white-out does not occur.** Both screenshots (`screenshots/010-immersive/260728-phase5-bsp-baked-wall.png`, close on the door and again on a far wall after autopilot walked into it) show a real lighting gradient across the grid texture — brighter near the light, falling off with distance — not flat ambient-only shading and not a white-out. This confirms the hypothesis from Phase 1's "Known issues": baked BSP lighting genuinely sidesteps the bug, since `LightingWorkflow::MapDynamicBspBaked` doesn't spawn a runtime `PointLight` at all when loading a `.bsp`.
