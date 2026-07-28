@@ -1,6 +1,6 @@
 # 010-immersive ("Immersive") — Phased spec: first-person immersive-sim prototype on TrenchBroom-authored Quake maps
 
-**Status:** Phases 1-3 and 4a done and verified (2026-07-28), all on a hand-authored bootstrap map. Phase 4b (TrenchBroom authoring) and Phase 5 (BSP compile) need a human at TrenchBroom / ericw-tools respectively — see the "Environment notes" section at the bottom for exactly what's installed on this machine.
+**Status:** Phases 1-3, 4a, and 5 done and verified (2026-07-28), all on a hand-authored bootstrap map. Only Phase 4b (TrenchBroom authoring) remains, and it needs a human at the TrenchBroom GUI — see the "Environment notes" section at the bottom for exactly what's installed on this machine.
 
 ## Context
 
@@ -137,21 +137,36 @@ TrenchBroom is a GUI editor with no meaningful CLI/scripting surface, so this st
 4. Save as `assets/maps/immersive/test.map` (overwriting the bootstrap one — or save elsewhere and update `config::MAP_PATH`).
 5. `cargo run --example 010-immersive` — no code changes needed, the loader doesn't care whether the `.map` came from TrenchBroom or a text generator.
 
-## Phase 5 — BSP compile with baked lighting
+## Phase 5 — BSP compile with baked lighting ✅
 
 **Goal:** the same map, compiled, loads with baked lightmaps + irradiance volumes.
 
-- Install ericw-tools (not on PATH as of Phase 1 — `brew install ericw-tools` or the 2.0.0-alpha10 release).
-- Switch `player_spawn` → `InfoPlayerStart` so qbsp's leak detection works; `GlobalAmbientLight::NONE`.
+ericw-tools isn't in Homebrew — it has to be built from source (no prebuilt release binary for this macOS/arch either, as of 2026-07-28). Build notes, in case this needs redoing:
+- `git clone`'d ericw-tools does **not** fetch its submodules (`3rdparty/{fmt,jsoncpp,nanobench,pareto}`) automatically — `git submodule status` shows a leading `-` on each until you run `git submodule update --init --recursive`. Without this, `cmake` fails immediately with "does not contain a CMakeLists.txt file" for each one.
+- `cmake .. -DCMAKE_PREFIX_PATH="$(brew --prefix embree);$(brew --prefix tbb)" -DCMAKE_BUILD_TYPE=Release -DDISABLE_DOCS=ON` — the `DISABLE_DOCS` flag matters: without it, `make` builds `qbsp`/`light`/`vis`/`bsputil` successfully (100%) and then fails on an unrelated Sphinx docs target (missing the `furo` HTML theme in the ambient Python env), making it look like the whole build failed when the tools were actually fine. The binaries land at `build/<tool>/<tool>` (e.g. `build/qbsp/qbsp`), not in a `build/bin/`.
+- Built version: **2.0.0-alpha11** (SPEC originally said alpha10 — close enough, no issues).
+
+**Two separate `.map` sources, not one** — this matters:
+- `assets/maps/immersive/test.map` stays exactly as Phase 1-4 left it (no `light` entity — a live `PointLight` reintroduces the white-out bug on the dynamic-load path). This is still what `cargo run --example 010-immersive` loads by default.
+- `assets/maps/immersive/test_bsp_source.map` is a **separate** generator output: the same room, plus a `light` entity and an `info_player_start` (qbsp's leak-fill occupant — the literal classname matters here, but our own `player_spawn` also has to be present alongside it or nothing spawns a camera and the screen goes solid black instead of white). This compiles to `assets/maps/immersive/test.bsp`. Toggle `config::MAP_PATH` between the two to switch which one the example loads.
 - **Critical:** use `-qbism` (Quake 2 BSP38). Plain Q1 BSP strips brushes unless compiled with `-wrbrushesonly`, and `convex_collider()` would find nothing — the player falls forever.
+
+Commands actually run:
 ```
-qbsp  -qbism -nosubdivide -nosoftware -path assets -notex assets/maps/immersive/test.map
+qbsp  -qbism -nosubdivide -nosoftware -path assets -notex \
+      assets/maps/immersive/test_bsp_source.map assets/maps/immersive/test.bsp
 light -wrnormals -extra4 -lightgrid -path assets \
       -bounce 8 -bouncecolorscale 1 -bouncestyled 1 -dirt 1 -phong 1 \
       assets/maps/immersive/test.bsp
 ```
-- Revisit the Phase-1 point-light white-out here — baked BSP lights don't spawn a runtime `PointLight` at all under `LightingWorkflow::MapDynamicBspBaked` when loading a `.bsp`, so this may be moot for baked content even if never root-caused.
-- LFS-track `.bsp` (`.gitattributes` already has the rule).
+qbsp produces `test.log`/`test-light.log`/`test.prt`/`test.content.json`/`test.texinfo.json` as compile byproducts alongside the `.bsp` — deleted after each compile, not checked in (only `test.bsp` matters at runtime, and it's already LFS-tracked via `.gitattributes`).
+
+**Verified (2026-07-28):** qbsp reported `1 player-occupiable leaves` (sealed, no leak) and no warnings; `light` completed with a populated lightgrid (`2048 grid nodes`) and no errors. Switched `config::MAP_PATH` to `test.bsp` temporarily and ran with `IMMERSIVE_SHOTS=1` (and separately with the full autopilot+telemetry harness):
+- **The Phase 1 point-light white-out does not occur.** Both screenshots (`screenshots/010-immersive/260728-phase5-bsp-baked-wall.png`, close on the door and again on a far wall after autopilot walked into it) show a real lighting gradient across the grid texture — brighter near the light, falling off with distance — not flat ambient-only shading and not a white-out. This confirms the hypothesis from Phase 1's "Known issues": baked BSP lighting genuinely sidesteps the bug, since `LightingWorkflow::MapDynamicBspBaked` doesn't spawn a runtime `PointLight` at all when loading a `.bsp`.
+- Movement/collision on BSP-loaded geometry matched the `.map` path almost exactly: same autopilot script produced the same walk-forward-then-stop-at-wall telemetry pattern, `grounded=true` throughout, halting at the same `z≈-6.087` wall boundary — the physics pipeline (convex colliders from `Brushes::Bsp`) behaves identically to the `.map` (`Brushes::Owned`) path.
+- `config::MAP_PATH` reverted back to `test.map` afterward — the `.bsp` path is proven working, but isn't the default; switch it manually to demonstrate baked lighting.
+
+Not done: `GlobalAmbientLight::NONE` (Bevy's default ambient wasn't zeroed for this test — the baked gradient was still clearly visible over it, but a cleaner comparison would zero it) and switching the primary `player_spawn` to rely solely on `InfoPlayerStart` (both coexist in `test_bsp_source.map` right now, which works but is slightly redundant).
 
 ## Phase 6 — Immersive-sim seasoning (later)
 
@@ -160,5 +175,5 @@ Physical object pickup via ahoy's `pickup` feature (`avian_pickup`); `func_butto
 ## Environment notes
 
 - TrenchBroom.app is installed on this Mac (`~/Library/Application Support/TrenchBroom` exists) — the game config + FGD write on every `cargo run` (`bevy_trenchbroom::config::writing` info logs confirm success).
-- ericw-tools is **not** installed — only needed starting Phase 5.
+- ericw-tools is built from source at `/Users/makkusu/Code/other/ericw-tools`, built at `/Users/makkusu/Code/other/ericw-tools/build/{qbsp,light,vis,bsputil}/<name>` (2.0.0-alpha11). Not on PATH — invoke by full path, or add the relevant `build/*/`  directories to PATH. See Phase 5 for the submodule-init and `-DDISABLE_DOCS=ON` gotchas that came up building it.
 - Synthetic input (cliclick/osascript CGEvent) is blocked on this Mac (no Accessibility grant) — see `.claude/skills/verify/SKILL.md`. Phase 4's in-process autopilot is the way around this for future verification.

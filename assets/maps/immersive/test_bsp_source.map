@@ -1,13 +1,6 @@
-// 010-immersive Phase 1/2/3 bootstrap map.
-// Hand-authored (not yet made in TrenchBroom) so the loader + controller
-// code can be verified before any level design happens. A hollow
-// 512x512x256-unit room built from 6 slab brushes (Valve220 format),
-// one player_spawn, one free-standing func_door, two item_pickups.
-// No Quake `light` entity -- see main.rs::spawn_light. A separate
-// source (gen_test_map_bsp_source.py -> test_bsp_source.map) adds one
-// back for the Phase 5 BSP compile, which doesn't hit the same bug.
-// Replace/extend this by opening TrenchBroom with game
-// "bevy_game_bits_immersive".
+// 010-immersive Phase 5 BSP compile source. Same room as test.map, plus
+// a light + info_player_start -- see this file's module docstring for why
+// this is a separate source rather than test.map itself.
 {
 "classname" "worldspawn"
 {
@@ -60,6 +53,10 @@
 }
 }
 {
+"classname" "info_player_start"
+"origin" "0 0 48"
+}
+{
 "classname" "player_spawn"
 "origin" "0 0 48"
 }
@@ -90,4 +87,9 @@
 "item" "battery"
 "prompt" "Take battery"
 "origin" "-96 96 32"
+}
+{
+"classname" "light"
+"origin" "0 0 220"
+"light" "300"
 }
