@@ -6,12 +6,25 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { version = "0.18", features = ["dynamic_linking", "ktx2", "zstd_rust"] }
+bevy = { version = "0.18", features = ["dynamic_linking", "ktx2", "zstd_rust", "wav", "experimental_pbr_pcss"] }
 bevy_hanabi = "0.18"
+# Pinned to 0.6: the 0.7 release requires Bevy 0.19. Used by examples/009-derby.
+avian3d = "0.6"
+# Pinned to 0.14: the 0.15 release requires Bevy 0.19. Used data-only (no 2D
+# rendering) — see examples/008-colony.
+bevy_ecs_ldtk = { version = "0.14.0", default-features = false, features = [
+  "derive",
+  "internal_levels",
+] }
 log = { version = "*", features = [
   "max_level_debug",
   "release_max_level_warn",
 ] }
+# Already resolved transitively via bevy_gltf; promoted to a direct
+# dependency for examples/009-derby's `export.rs`, which hand-builds the
+# derby car's GLB from its procedural meshes/materials.
+gltf-json = { version = "1.4", features = ["names", "KHR_materials_emissive_strength"] }
+serde_json = "1"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
