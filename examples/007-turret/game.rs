@@ -161,7 +161,8 @@ impl Plugin for GamePlugin {
                     hud::update_base_hp,
                     hud::update_status,
                     restart,
-                    audio::play_sfx,
+                    audio::verify_sfx,
+                    audio::play_sfx.after(audio::verify_sfx),
                     audio::update_laser_loops,
                 ),
             )

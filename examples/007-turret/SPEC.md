@@ -96,7 +96,9 @@ pairs sandwiching a dense grunt/runner rush.
 
 Gameplay systems emit `PlaySfx` messages; `audio.rs` owns all playback. Every
 sound below currently maps to a jsfxr placeholder blip (`assets/sfx/jsfxr/`) —
-swap the paths in `Sfx::path()` when real assets exist.
+swap the paths in `Sfx::path()` when real assets exist. A sound whose asset is
+missing or undecodable (e.g. an unfetched git-lfs pointer file) logs one error
+and stays silent instead of crashing the run.
 
 | Sfx | Trigger | Placeholder | Notes |
 |-----|---------|-------------|-------|
