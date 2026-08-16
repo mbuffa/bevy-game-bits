@@ -6,8 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { version = "0.18", features = ["dynamic_linking", "ktx2", "zstd_rust", "wav"] }
+bevy = { version = "0.18", features = ["dynamic_linking", "ktx2", "zstd_rust", "wav", "experimental_pbr_pcss"] }
 bevy_hanabi = "0.18"
+# Pinned to 0.14: the 0.15 release requires Bevy 0.19. Used data-only (no 2D
+# rendering) — see examples/008-colony.
+bevy_ecs_ldtk = { version = "0.14.0", default-features = false, features = [
+  "derive",
+  "internal_levels",
+] }
 log = { version = "*", features = [
   "max_level_debug",
   "release_max_level_warn",
