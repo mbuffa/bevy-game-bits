@@ -13,6 +13,18 @@ You can then run any example with this command:
 cargo run --example 004-infinite-runner
 ```
 
+## Reusable bits
+
+A few mechanics have graduated out of the examples into the library, so they
+can be dropped into another project:
+
+- `bevy_game_bits::jump` — a configurable parabolic jump (from `000-jump`).
+- `bevy_game_bits::vehicle` — a raycast-suspension car for Avian 3D:
+  spring/damper suspension, a slip-based tire model with a friction circle,
+  Ackermann steering, flip rescue, plus optional skid marks and a
+  collision-damage pipeline. Extracted from `009-derby`;
+  `012-vehicle` is the minimal example of using it.
+
 ## Track
 
 I try to follow this path, allowing myself to work on secondary topics from time to time.
@@ -30,6 +42,7 @@ The second one contains random topics that I simply wanted to work on after a sh
 |  Projectiles (Ricochets, Homing Missile, Grenades...)
 |  Turret
 |  Game Feel (Screen Shake, Hit Feedback)
+|  Vehicle Physics (Raycast Suspension, Tire Model)
 |  Procedural Spawns
 |  Rounds
 |  Character Progression
