@@ -24,6 +24,11 @@ can be dropped into another project:
   Ackermann steering, flip rescue, plus optional skid marks and a
   collision-damage pipeline. Extracted from `009-derby`;
   `012-vehicle` is the minimal example of using it.
+- `bevy_game_bits::inventory` — a tetris-style grid inventory: configurable
+  board size, click-to-select with a description panel, hold-to-drag/
+  release-to-drop with a live placement preview, and a show/hide window
+  state a host flips with `NextState`. Item data and sounds are entirely
+  host-supplied. Extracted from `008-inventory`, now its minimal example.
 
 ## Track
 
