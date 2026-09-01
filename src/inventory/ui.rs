@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
 use crate::inventory::config::{InventoryBoardSpec, InventoryConfig, InventoryTheme};
-use crate::inventory::drag::{InventoryCursor, InventoryDragState, InventorySelection};
+use crate::inventory::drag::{InventoryClicks, InventoryCursor, InventoryDragState, InventorySelection};
 use crate::inventory::grid::InventoryGrid;
 use crate::inventory::items::{InventoryItem, InventorySlot};
 use crate::inventory::InventoryWindow;
@@ -24,7 +24,10 @@ use crate::inventory::InventoryWindow;
 /// Every per-board component ([`InventoryConfig`], [`InventoryTheme`],
 /// [`InventoryLayout`](super::InventoryLayout), [`InventoryGrid`],
 /// [`InventoryCursor`], [`InventoryDragState`], [`InventorySelection`],
-/// [`InventoryWindow`], [`InventoryParts`]) lives on this entity.
+/// [`InventoryClicks`], [`InventoryWindow`],
+/// [`InventoryAccess`](super::InventoryAccess),
+/// [`InventoryTransferTarget`](super::InventoryTransferTarget),
+/// [`InventoryParts`]) lives on this entity.
 #[derive(Component)]
 pub struct InventoryBoard;
 
@@ -76,6 +79,7 @@ pub fn spawn_inventory(commands: &mut Commands, spec: InventoryBoardSpec) -> Ent
         layout,
         window,
         access,
+        transfer_target,
     } = spec;
 
     let root = commands
@@ -156,8 +160,10 @@ pub fn spawn_inventory(commands: &mut Commands, spec: InventoryBoardSpec) -> Ent
         InventoryCursor::default(),
         InventoryDragState::default(),
         InventorySelection::default(),
+        InventoryClicks::default(),
         window,
         access,
+        transfer_target,
         layout,
         config,
         theme,

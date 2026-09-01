@@ -1,12 +1,13 @@
-//! What an item is, and the two operations that must touch its node and the
-//! occupancy grid together.
+//! What an item is, and the three operations that must touch its node and the
+//! occupancy grid together: spawning it, despawning it, and moving it across
+//! boards.
 
 use std::borrow::Cow;
 
 use bevy::prelude::*;
 
 use crate::inventory::config::{InventoryConfig, InventoryTheme};
-use crate::inventory::drag::InventorySelection;
+use crate::inventory::drag::{InventoryAction, InventorySelection};
 use crate::inventory::grid::InventoryGrid;
 use crate::inventory::ui::{place_node, Z_ITEM_IDLE};
 
@@ -190,4 +191,54 @@ pub fn despawn_item(
         selection.0 = None;
     }
     commands.entity(item).despawn();
+}
+
+/// Move `item` from `source` to `target`, landing at `to`: free the source
+/// grid, stamp the target grid, carry the selection across, rewrite the slot
+/// and the node **in the target board's pixel space**, reparent, and fire
+/// [`InventoryAction::Transferred`]. The caller has already checked `to`
+/// fits.
+///
+/// This is the one definition of what a transfer *is* — the drag-and-drop
+/// cross-board path ([`end_drag`](super::end_drag)), the double-click
+/// [`quick_transfer`](super::quick_transfer), and
+/// [`InventoryCommands::transfer`](super::InventoryCommands::transfer) all
+/// route through here rather than each re-deriving it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transfer_item(
+    commands: &mut Commands,
+    item: Entity,
+    size: UVec2,
+    from: UVec2,
+    to: UVec2,
+    source: (Entity, &mut InventoryGrid, &mut InventorySelection),
+    target: (
+        Entity,
+        &mut InventoryGrid,
+        &mut InventorySelection,
+        &InventoryConfig,
+    ),
+    slot: &mut InventorySlot,
+    node: &mut Node,
+    actions: &mut MessageWriter<InventoryAction>,
+) {
+    let (source_board, source_grid, source_selection) = source;
+    let (target_board, target_grid, target_selection, target_config) = target;
+
+    source_grid.clear(item);
+    target_grid.place(item, to, size);
+    if source_selection.0 == Some(item) {
+        source_selection.0 = None;
+    }
+    target_selection.0 = Some(item);
+    slot.0 = to;
+    place_node(node, to, size, target_config);
+    commands.entity(item).insert(ChildOf(target_board));
+    actions.write(InventoryAction::Transferred {
+        from_board: source_board,
+        to_board: target_board,
+        item,
+        from,
+        to,
+    });
 }

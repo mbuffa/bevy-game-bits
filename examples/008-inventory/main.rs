@@ -13,11 +13,14 @@
 //! routes `InventoryAction` to a sound.
 //!
 //! Items drag **between** the two boards — pick one up on the stash and drop
-//! it on the bag, or the reverse. `R` toggles whether the stash will exchange
-//! items at all (`InventoryAccess::transfers` — the stand-in for a "is the
-//! player next to the crate?" check a 3D game would run every frame); `T`
-//! toggles `interactive`, which also stops rearranging the stash's own
-//! contents.
+//! it on the bag, or the reverse. Double-clicking an item is the fast version
+//! of the same move: `link_boards` points each board's `InventoryTransferTarget`
+//! at the other one, so a double-click sends the item straight across. `R`
+//! toggles whether the stash will exchange items at all (`InventoryAccess::transfers`
+//! — the stand-in for a "is the player next to the crate?" check a 3D game
+//! would run every frame, and the same switch both dragging and double-click
+//! transfer obey); `T` toggles `interactive`, which also stops rearranging
+//! (and double-clicking) the stash's own contents.
 //!
 //! Everything specific to *this* inventory lives here: the loadout, the loot
 //! table, the keybindings, and the mapping from `InventoryAction` to sounds.
@@ -186,6 +189,7 @@ fn main() {
                 spawn_camera,
                 spawn_stash.in_set(InventorySet::Setup),
                 fill_boards.after(InventorySet::Setup),
+                link_boards.after(InventorySet::Setup),
             ),
         )
         .add_systems(
@@ -258,6 +262,25 @@ fn fill_boards(
                 *origin,
             );
         }
+    }
+}
+
+/// The one line of host wiring [`InventoryTransferTarget`] asks for: point
+/// each board at the other, so a double-click sends an item across. A 3D game
+/// would rewrite this every frame from "which container is the player
+/// standing at"; here `R`/`T` already stand in for that reach check, and the
+/// library refuses a transfer to a *closed* board on its own, so a fixed
+/// pairing set once at startup is enough.
+fn link_boards(
+    bag: Res<DefaultInventoryBoard>,
+    stash: Res<StashBoard>,
+    mut targets: Query<&mut InventoryTransferTarget>,
+) {
+    if let Ok(mut target) = targets.get_mut(**bag) {
+        target.0 = Some(**stash);
+    }
+    if let Ok(mut target) = targets.get_mut(**stash) {
+        target.0 = Some(**bag);
     }
 }
 
@@ -363,7 +386,7 @@ fn play_inventory_sfx(
 ) {
     for action in actions.read() {
         let sound = match action {
-            InventoryAction::Selected { .. } => Sfx::Select,
+            InventoryAction::Selected { .. } | InventoryAction::Activated { .. } => Sfx::Select,
             InventoryAction::PickedUp { .. } => Sfx::PickUp,
             InventoryAction::Dropped { .. }
             | InventoryAction::Transferred { .. }
