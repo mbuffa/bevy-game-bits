@@ -197,7 +197,8 @@ impl VehicleImpact {
     /// The largest Δv either side took — how hard this hit was, for effects
     /// that want one number per collision rather than one per car.
     pub fn peak_delta_v(&self) -> f32 {
-        self.sides().fold(0.0_f32, |peak, side| peak.max(side.delta_v))
+        self.sides()
+            .fold(0.0_f32, |peak, side| peak.max(side.delta_v))
     }
 }
 
@@ -419,7 +420,10 @@ impl Plugin for VehicleImpactPlugin {
             .insert_resource(self.debris)
             .add_message::<VehicleImpact>()
             .configure_sets(FixedUpdate, VehicleSet::Impact.after(VehicleSet::Control))
-            .add_systems(FixedUpdate, detect_vehicle_impacts.in_set(VehicleSet::Impact));
+            .add_systems(
+                FixedUpdate,
+                detect_vehicle_impacts.in_set(VehicleSet::Impact),
+            );
     }
 }
 
@@ -478,7 +482,10 @@ mod tests {
             amount: 0.27,
             landing_softness: 1.0,
         };
-        let impact = VehicleImpact { point: Vec3::ZERO, sides: [Some(side), None] };
+        let impact = VehicleImpact {
+            point: Vec3::ZERO,
+            sides: [Some(side), None],
+        };
         assert_eq!(impact.sides().count(), 1);
         assert!(impact.side(0).is_some());
         assert!(impact.opposite(0).is_none());
