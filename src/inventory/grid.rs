@@ -5,14 +5,28 @@
 
 use bevy::prelude::*;
 
+/// The result of an [`InventoryGrid::resize`]: which items had to move to a
+/// new origin, and which no longer fit anywhere and were dropped from the
+/// grid entirely. Empty vecs on a grow.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResizeOutcome {
+    /// `(item, new_origin)` for every item whose old footprint no longer fit
+    /// but which found a fresh row-major spot.
+    pub relocated: Vec<(Entity, UVec2)>,
+    /// Items that fit nowhere on the new board and were removed from the grid.
+    /// The caller still has to despawn their nodes.
+    pub evicted: Vec<Entity>,
+}
+
 /// Row-major occupancy grid: `cells[y * cols + x]` is the item (if any)
 /// covering that cell. The single source of truth for hit-testing and
 /// placement — there's no separate picking layer, and deliberately no
 /// `Default`: a board with no size isn't a thing you ever want by accident.
-/// [`InventoryPlugin`](super::InventoryPlugin) builds one from
-/// [`InventoryConfig`](super::InventoryConfig); construct one yourself only
-/// in tests.
-#[derive(Resource)]
+/// A `Component` on the board entity;
+/// [`spawn_inventory`](super::spawn_inventory) builds one from
+/// [`InventoryConfig`](super::InventoryConfig). Construct one yourself only in
+/// tests.
+#[derive(Component)]
 pub struct InventoryGrid {
     cells: Vec<Option<Entity>>,
     cols: u32,
@@ -21,7 +35,11 @@ pub struct InventoryGrid {
 
 impl InventoryGrid {
     pub fn new(cols: u32, rows: u32) -> Self {
-        Self { cells: vec![None; (cols * rows) as usize], cols, rows }
+        Self {
+            cells: vec![None; (cols * rows) as usize],
+            cols,
+            rows,
+        }
     }
 
     pub fn cols(&self) -> u32 {
@@ -104,6 +122,57 @@ impl InventoryGrid {
             }
         }
         None
+    }
+
+    /// Would a `size`-shaped item fit *anywhere* right now? The question a
+    /// host asks before spawning loot it might have to drop on the floor
+    /// instead.
+    pub fn has_room_for(&self, size: UVec2) -> bool {
+        self.first_fit(size).is_some()
+    }
+
+    /// How many cells are currently empty. Not the same as "can I fit a 2x2"
+    /// — the free cells may be scattered — but a cheap upper bound and handy
+    /// for a HUD.
+    pub fn free_cells(&self) -> u32 {
+        self.cells.iter().filter(|c| c.is_none()).count() as u32
+    }
+
+    /// Re-shape the board to `cols`x`rows` and re-place `occupants` —
+    /// `(item, current_origin, size)` for every item currently on the board,
+    /// which the caller must supply because the grid stores only entities per
+    /// cell, not sizes.
+    ///
+    /// Processed row-major over the *old* board so the outcome is
+    /// deterministic. An item whose current footprint still fits keeps its
+    /// origin; one that doesn't is re-placed with [`first_fit`](Self::first_fit);
+    /// one that still fits nowhere is evicted (cleared from the grid — the
+    /// caller despawns the node).
+    pub fn resize(
+        &mut self,
+        cols: u32,
+        rows: u32,
+        occupants: &[(Entity, UVec2, UVec2)],
+    ) -> ResizeOutcome {
+        self.cols = cols;
+        self.rows = rows;
+        self.cells = vec![None; (cols * rows) as usize];
+
+        let mut ordered: Vec<&(Entity, UVec2, UVec2)> = occupants.iter().collect();
+        ordered.sort_by_key(|(_, origin, _)| (origin.y, origin.x));
+
+        let mut outcome = ResizeOutcome::default();
+        for &&(item, origin, size) in &ordered {
+            if self.fits(origin.as_ivec2(), size, None) {
+                self.place(item, origin, size);
+            } else if let Some(new_origin) = self.first_fit(size) {
+                self.place(item, new_origin, size);
+                outcome.relocated.push((item, new_origin));
+            } else {
+                outcome.evicted.push(item);
+            }
+        }
+        outcome
     }
 }
 
@@ -236,37 +305,138 @@ mod tests {
     }
 
     #[test]
+    fn has_room_for_and_free_cells_track_occupancy() {
+        let item = entities(1)[0];
+        let mut grid = InventoryGrid::new(3, 2);
+        assert_eq!(grid.free_cells(), 6);
+        assert!(grid.has_room_for(UVec2::new(3, 2)));
+
+        grid.place(item, UVec2::new(0, 0), UVec2::new(2, 2));
+        assert_eq!(grid.free_cells(), 2);
+        // Two cells free, but they're a 1x2 column — no 2x1 fits.
+        assert!(grid.has_room_for(UVec2::new(1, 2)));
+        assert!(!grid.has_room_for(UVec2::new(2, 1)));
+    }
+
+    #[test]
+    fn resize_growing_keeps_every_origin() {
+        let items = entities(2);
+        let mut grid = InventoryGrid::new(3, 3);
+        grid.place(items[0], UVec2::new(0, 0), UVec2::new(2, 1));
+        grid.place(items[1], UVec2::new(2, 2), UVec2::new(1, 1));
+
+        let outcome = grid.resize(
+            5,
+            5,
+            &[
+                (items[0], UVec2::new(0, 0), UVec2::new(2, 1)),
+                (items[1], UVec2::new(2, 2), UVec2::new(1, 1)),
+            ],
+        );
+        assert_eq!(outcome, ResizeOutcome::default());
+        assert_eq!(grid.at(UVec2::new(0, 0)), Some(items[0]));
+        assert_eq!(grid.at(UVec2::new(2, 2)), Some(items[1]));
+    }
+
+    #[test]
+    fn resize_shrinking_relocates_what_it_can_and_evicts_the_rest() {
+        let items = entities(3);
+        // Lay three 2x1 items down the left of a 2-wide board.
+        let mut grid = InventoryGrid::new(2, 3);
+        grid.place(items[0], UVec2::new(0, 0), UVec2::new(2, 1));
+        grid.place(items[1], UVec2::new(0, 1), UVec2::new(2, 1));
+        grid.place(items[2], UVec2::new(0, 2), UVec2::new(2, 1));
+
+        // Shrink to 2x2: row 0 still fits in place, row 1 still fits in place,
+        // row 2's item has nowhere to go.
+        let occupants = [
+            (items[0], UVec2::new(0, 0), UVec2::new(2, 1)),
+            (items[1], UVec2::new(0, 1), UVec2::new(2, 1)),
+            (items[2], UVec2::new(0, 2), UVec2::new(2, 1)),
+        ];
+        let outcome = grid.resize(2, 2, &occupants);
+        assert_eq!(outcome.relocated, vec![]);
+        assert_eq!(outcome.evicted, vec![items[2]]);
+        assert_eq!(grid.at(UVec2::new(0, 0)), Some(items[0]));
+        assert_eq!(grid.at(UVec2::new(0, 1)), Some(items[1]));
+
+        // A shrink that forces a relocation: put a 1x1 at (2,2) on a 3x3,
+        // shrink to 3x1 — it can't stay, but (2,0) is free.
+        let mut grid = InventoryGrid::new(3, 3);
+        grid.place(items[0], UVec2::new(0, 0), UVec2::new(2, 1));
+        grid.place(items[1], UVec2::new(2, 2), UVec2::new(1, 1));
+        let outcome = grid.resize(
+            3,
+            1,
+            &[
+                (items[0], UVec2::new(0, 0), UVec2::new(2, 1)),
+                (items[1], UVec2::new(2, 2), UVec2::new(1, 1)),
+            ],
+        );
+        assert_eq!(outcome.relocated, vec![(items[1], UVec2::new(2, 0))]);
+        assert_eq!(outcome.evicted, vec![]);
+        assert_eq!(grid.at(UVec2::new(2, 0)), Some(items[1]));
+    }
+
+    #[test]
     fn target_origin_shifts_back_by_grab_offset() {
         // A 4x1 rifle grabbed on its 4th cell (offset 3,0), hovered with
         // that cell over column 5, should land with its origin at column 2.
-        assert_eq!(target_origin(IVec2::new(5, 0), UVec2::new(3, 0)), IVec2::new(2, 0));
+        assert_eq!(
+            target_origin(IVec2::new(5, 0), UVec2::new(3, 0)),
+            IVec2::new(2, 0)
+        );
         // Grabbed on its origin cell, the origin follows the hover exactly.
-        assert_eq!(target_origin(IVec2::new(5, 0), UVec2::new(0, 0)), IVec2::new(5, 0));
+        assert_eq!(
+            target_origin(IVec2::new(5, 0), UVec2::new(0, 0)),
+            IVec2::new(5, 0)
+        );
         // Can go negative — `fits` is what rejects that, not this helper.
-        assert_eq!(target_origin(IVec2::new(1, 0), UVec2::new(3, 0)), IVec2::new(-2, 0));
+        assert_eq!(
+            target_origin(IVec2::new(1, 0), UVec2::new(3, 0)),
+            IVec2::new(-2, 0)
+        );
         // Hovering past an edge (dragging the item off the board) is a
         // legitimate, signed hover coordinate, not a clamped one.
-        assert_eq!(target_origin(IVec2::new(-1, 0), UVec2::new(0, 0)), IVec2::new(-1, 0));
+        assert_eq!(
+            target_origin(IVec2::new(-1, 0), UVec2::new(0, 0)),
+            IVec2::new(-1, 0)
+        );
     }
 
     #[test]
     fn grab_offset_floors_to_containing_cell() {
         let cell = 64.0;
         assert_eq!(grab_offset(Vec2::new(0.0, 0.0), cell), UVec2::new(0, 0));
-        assert_eq!(grab_offset(Vec2::new(cell - 0.01, 0.0), cell), UVec2::new(0, 0));
+        assert_eq!(
+            grab_offset(Vec2::new(cell - 0.01, 0.0), cell),
+            UVec2::new(0, 0)
+        );
         // Exactly on the boundary belongs to the next cell.
         assert_eq!(grab_offset(Vec2::new(cell, 0.0), cell), UVec2::new(1, 0));
-        assert_eq!(grab_offset(Vec2::new(cell * 3.5, cell * 1.9), cell), UVec2::new(3, 1));
+        assert_eq!(
+            grab_offset(Vec2::new(cell * 3.5, cell * 1.9), cell),
+            UVec2::new(3, 1)
+        );
     }
 
     #[test]
     fn hovered_cell_floors_and_goes_negative_past_the_left_edge() {
         let cell = 64.0;
         assert_eq!(hovered_cell(Vec2::new(0.0, 0.0), cell), IVec2::new(0, 0));
-        assert_eq!(hovered_cell(Vec2::new(cell - 0.01, cell - 0.01), cell), IVec2::new(0, 0));
+        assert_eq!(
+            hovered_cell(Vec2::new(cell - 0.01, cell - 0.01), cell),
+            IVec2::new(0, 0)
+        );
         assert_eq!(hovered_cell(Vec2::new(cell, cell), cell), IVec2::new(1, 1));
         // Past the left/top edge: negative, not clamped to 0.
-        assert_eq!(hovered_cell(Vec2::new(-1.0, -1.0), cell), IVec2::new(-1, -1));
-        assert_eq!(hovered_cell(Vec2::new(-cell - 1.0, 0.0), cell), IVec2::new(-2, 0));
+        assert_eq!(
+            hovered_cell(Vec2::new(-1.0, -1.0), cell),
+            IVec2::new(-1, -1)
+        );
+        assert_eq!(
+            hovered_cell(Vec2::new(-cell - 1.0, 0.0), cell),
+            IVec2::new(-2, 0)
+        );
     }
 }

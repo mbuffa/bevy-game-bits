@@ -136,14 +136,22 @@ enum DriveCmd {
 /// The bundle does *not* include a `Transform` — spawn the car where you want
 /// it, at least [`VehicleSpec::spawn_height`] off the ground so its wheels
 /// start within raycast range.
-pub fn chassis_bundle(spec: VehicleSpec, tuning: &VehicleTuning, geometry: VehicleGeometry) -> impl Bundle {
+pub fn chassis_bundle(
+    spec: VehicleSpec,
+    tuning: &VehicleTuning,
+    geometry: VehicleGeometry,
+) -> impl Bundle {
     (
         Vehicle::new(geometry),
         spec,
         DriveInput::default(),
         DrivePower::default(),
         RigidBody::Dynamic,
-        Collider::cuboid(spec.collider_size.x, spec.collider_size.y, spec.collider_size.z),
+        Collider::cuboid(
+            spec.collider_size.x,
+            spec.collider_size.y,
+            spec.collider_size.z,
+        ),
         Mass(spec.mass),
         CenterOfMass(spec.com_offset),
         LinearDamping(tuning.chassis_linear_damping),
@@ -315,7 +323,10 @@ pub fn vehicle_controller(
             forces.apply_force_at_point(chassis_up * load, contact_point);
 
             if just_landed && closing >= tuning.landing_thump_min_speed {
-                landings.write(WheelLanding { position: contact_point, speed: closing });
+                landings.write(WheelLanding {
+                    position: contact_point,
+                    speed: closing,
+                });
             }
 
             // Wheel basis: chassis orientation, steered for front wheels,
@@ -386,11 +397,22 @@ pub fn vehicle_controller(
             // budget proportional to the wheel's live load. This is where load
             // transfer, throttle-on oversteer, and braking understeer all come
             // from.
-            let mu = if wheel.steering { spec.mu_front } else { spec.mu_rear }
-                * if handbraked { tuning.handbrake_mu_scale } else { 1.0 };
+            let mu = if wheel.steering {
+                spec.mu_front
+            } else {
+                spec.mu_rear
+            } * if handbraked {
+                tuning.handbrake_mu_scale
+            } else {
+                1.0
+            };
             let cap = mu * load;
             let mag = lat_force.hypot(long_force);
-            let scale = if mag > cap && mag > 0.0 { cap / mag } else { 1.0 };
+            let scale = if mag > cap && mag > 0.0 {
+                cap / mag
+            } else {
+                1.0
+            };
 
             forces.apply_force_at_point(forward_dir * long_force * scale, contact_point);
             // The lateral force applies part-way up toward CoM height: same

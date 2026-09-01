@@ -70,7 +70,10 @@ pub fn load_sfx(mut commands: Commands, asset_server: Res<AssetServer>) {
         .into_iter()
         .map(|sfx| (sfx, asset_server.load(sfx.path())))
         .collect();
-    let status = Sfx::ALL.into_iter().map(|sfx| (sfx, SfxStatus::Pending)).collect();
+    let status = Sfx::ALL
+        .into_iter()
+        .map(|sfx| (sfx, SfxStatus::Pending))
+        .collect();
     commands.insert_resource(SfxAssets {
         handles,
         status,
@@ -82,7 +85,8 @@ pub fn load_sfx(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// never reach `AudioPlayer`. Covers the two formats this build can decode:
 /// wav (feature enabled in Cargo.toml) and ogg/vorbis (on by default).
 fn is_decodable(bytes: &[u8]) -> bool {
-    (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WAVE"[..])) || bytes.starts_with(b"OggS")
+    (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WAVE"[..]))
+        || bytes.starts_with(b"OggS")
 }
 
 /// Resolve pending sfx loads to `Ready`/`Broken` and replay anything that was
@@ -111,18 +115,27 @@ pub fn verify_sfx(
         let handle = &assets.handles[&sfx];
         let resolved = match asset_server.load_state(handle.id()) {
             LoadState::Failed(err) => {
-                error!("sfx {}: load failed ({err}); this sound is muted", sfx.path());
+                error!(
+                    "sfx {}: load failed ({err}); this sound is muted",
+                    sfx.path()
+                );
                 Some(SfxStatus::Broken)
             }
             LoadState::Loaded => {
-                let decodable = audio_sources.get(handle).is_some_and(|source| is_decodable(&source.bytes));
+                let decodable = audio_sources
+                    .get(handle)
+                    .is_some_and(|source| is_decodable(&source.bytes));
                 if !decodable {
                     error!(
                         "sfx {}: not a decodable audio container (unfetched git-lfs pointer, or a format whose cargo feature is off); this sound is muted",
                         sfx.path()
                     );
                 }
-                Some(if decodable { SfxStatus::Ready } else { SfxStatus::Broken })
+                Some(if decodable {
+                    SfxStatus::Ready
+                } else {
+                    SfxStatus::Broken
+                })
             }
             LoadState::NotLoaded | LoadState::Loading => None,
         };
@@ -154,7 +167,11 @@ fn spawn_one_shot(commands: &mut Commands, assets: &SfxAssets, sfx: Sfx) {
     ));
 }
 
-pub fn play_sfx(mut commands: Commands, mut requests: MessageReader<PlaySfx>, mut assets: ResMut<SfxAssets>) {
+pub fn play_sfx(
+    mut commands: Commands,
+    mut requests: MessageReader<PlaySfx>,
+    mut assets: ResMut<SfxAssets>,
+) {
     for PlaySfx(sfx) in requests.read() {
         match assets.status.get(sfx) {
             Some(SfxStatus::Ready) => spawn_one_shot(&mut commands, &assets, *sfx),
