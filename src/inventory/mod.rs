@@ -46,9 +46,10 @@
 //! `inv.add_at` forces an origin, `inv.remove(item)` takes one out,
 //! `inv.has_room_for` / `inv.free_cells` answer "can I even pick this up",
 //! and `inv.resize(board, cols, rows)` re-shapes a board (applied at
-//! [`InventorySet::Commands`]). For systems that would rather not name a
-//! board type, the [`AddItem`] and [`ResizeInventory`] messages do the same
-//! jobs.
+//! [`InventorySet::Commands`]). `inv.transfer(item, board)` / `inv.transfer_at`
+//! move an already-spawned item to another board without despawning it. For
+//! systems that would rather not name a board type, the [`AddItem`] and
+//! [`ResizeInventory`] messages do the same jobs.
 //!
 //! # The pieces
 //!
@@ -61,9 +62,9 @@
 //!   [`despawn_item`], the checked way to keep a node and its grid entry from
 //!   disagreeing.
 //! - [`commands`] — [`InventoryCommands`] and the request messages.
-//! - [`drag`] — press-to-select / hold-to-drag / release-to-drop, and
-//!   [`InventoryAction`], the message this module fires instead of playing a
-//!   sound itself.
+//! - [`drag`] — press-to-select / hold-to-drag / release-to-drop, the
+//!   double-click [`quick_transfer`], and [`InventoryAction`], the message
+//!   this module fires instead of playing a sound itself.
 //! - [`ui`] — [`spawn_inventory`], the board/panel layout, and the systems
 //!   that keep it in sync with the model.
 //!
@@ -99,6 +100,21 @@
 //! one. Write it every frame from whatever check you like; the module only
 //! reads it.
 //!
+//! # Quick transfer
+//!
+//! A double-click also moves an item across — for when dragging across the
+//! screen is more precision than the moment calls for. It always fires
+//! [`InventoryAction::Activated`], the hook for "equip"/"use"/whatever else a
+//! double-click should mean in your game. If that board's
+//! [`InventoryTransferTarget`] names another *open* board that
+//! [`InventoryAccess`] allows exchanging with and that has room, the item
+//! lands there too ([`InventoryAction::Transferred`]; a named board with no
+//! room instead fires [`InventoryAction::Rejected`]). Unlike `InventoryAccess`,
+//! nothing about the destination is inferred — the library has no rule for
+//! "closest board" or "first board found", because that's exactly the part a
+//! host's reach check should own. `None` (the default) means a double-click
+//! here only ever activates, never moves anything.
+//!
 //! # Limits
 //!
 //! A drag still starts and ends within one gesture — you can't park a half-
@@ -120,8 +136,9 @@ use bevy::prelude::*;
 pub use commands::{AddItem, InventoryCommands, ResizeInventory};
 pub use config::{InventoryBoardSpec, InventoryConfig, InventoryLayout, InventoryTheme, PanelSide};
 pub use drag::{
-    begin_drag, end_drag, reset_interaction, track_cursor, track_drag_target, update_drag,
-    InventoryAction, InventoryCursor, InventoryDragState, InventoryPreview, InventorySelection,
+    begin_drag, end_drag, quick_transfer, reset_interaction, track_cursor, track_drag_target,
+    update_drag, InventoryAction, InventoryClicks, InventoryCursor, InventoryDragState,
+    InventoryPreview, InventorySelection,
 };
 pub use grid::{grab_offset, hovered_cell, target_origin, InventoryGrid, ResizeOutcome};
 pub use items::{despawn_item, spawn_item, InventoryItem, InventorySlot};
@@ -135,13 +152,14 @@ pub use ui::{
 /// Everything you need to build and drive an inventory, in one import.
 pub mod prelude {
     pub use super::{
-        despawn_item, grab_offset, hovered_cell, spawn_inventory, spawn_item, target_origin,
-        track_drag_target, AddItem, DefaultInventoryBoard, InventoryAccess, InventoryAction,
-        InventoryBoard, InventoryBoardSpec, InventoryCell, InventoryCommands, InventoryConfig,
-        InventoryCursor, InventoryDescriptionSwatch, InventoryDescriptionText, InventoryDragState,
-        InventoryGrid, InventoryItem, InventoryLayout, InventoryParts, InventoryPlugin,
-        InventoryPreview, InventoryRoot, InventorySelection, InventorySet, InventorySlot,
-        InventoryTheme, InventoryWindow, PanelSide, ResizeInventory,
+        despawn_item, grab_offset, hovered_cell, quick_transfer, spawn_inventory, spawn_item,
+        target_origin, track_drag_target, AddItem, DefaultInventoryBoard, InventoryAccess,
+        InventoryAction, InventoryBoard, InventoryBoardSpec, InventoryCell, InventoryClicks,
+        InventoryCommands, InventoryConfig, InventoryCursor, InventoryDescriptionSwatch,
+        InventoryDescriptionText, InventoryDragState, InventoryGrid, InventoryItem,
+        InventoryLayout, InventoryParts, InventoryPlugin, InventoryPreview, InventoryRoot,
+        InventorySelection, InventorySet, InventorySlot, InventoryTheme,
+        InventoryTransferTarget, InventoryWindow, PanelSide, ResizeInventory,
     };
 }
 
@@ -164,8 +182,9 @@ pub enum InventorySet {
     /// Bevy's normal spawn flush.
     Commands,
     /// `Update`, after [`Commands`](Self::Commands). [`track_cursor`],
-    /// [`track_drag_target`], [`begin_drag`], [`update_drag`], [`end_drag`],
-    /// chained. Each skips a closed board internally.
+    /// [`track_drag_target`], [`begin_drag`], [`quick_transfer`],
+    /// [`update_drag`], [`end_drag`], chained. Each skips a closed board
+    /// internally.
     Interaction,
     /// `Update`, after [`Interaction`](Self::Interaction). The four `sync_*`
     /// systems that push model state back out to `Node`s and colors.
@@ -214,6 +233,17 @@ impl Default for InventoryAccess {
         }
     }
 }
+
+/// The board a double-click on *this* board sends items to. A `Component` on
+/// the board entity, written by the host and only ever read by this module —
+/// re-point it every frame from whatever reach check the game runs (or set it
+/// once, for a fixed pairing like a player bag and its own stash). See the
+/// module docs' "Quick transfer" section.
+///
+/// `None` (the [`Default`]) means a double-click here still fires
+/// [`InventoryAction::Activated`], but moves nothing.
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct InventoryTransferTarget(pub Option<Entity>);
 
 /// The entity of the board [`InventoryPlugin`] spawned for you. Absent if the
 /// plugin was built with [`InventoryPlugin::headless`].
@@ -299,6 +329,7 @@ impl Plugin for InventoryPlugin {
                     drag::track_cursor,
                     drag::track_drag_target,
                     drag::begin_drag,
+                    drag::quick_transfer,
                     drag::update_drag,
                     drag::end_drag,
                 )

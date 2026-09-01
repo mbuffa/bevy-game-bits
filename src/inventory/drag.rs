@@ -1,7 +1,9 @@
 //! Press-to-select, hold-to-drag, release-to-drop. A press that never moves
 //! past [`InventoryConfig::drag_threshold_px`] is a plain click: it selects
 //! the item (so `ui::sync_description` shows it) without ever entering the
-//! held state.
+//! held state. Two such clicks on the same item within
+//! [`InventoryConfig::double_click_secs`] are a double-click — see
+//! [`quick_transfer`].
 //!
 //! Every system here is per-board — a `Query` over `With<InventoryBoard>` that
 //! skips any board whose [`InventoryWindow`] is closed. The [`InventoryDragState`]
@@ -9,7 +11,9 @@
 //! information lives), but its `target` field tracks whichever board the
 //! cursor is currently over, so a release can drop the item onto a *different*
 //! board — see [`track_drag_target`] and [`InventoryAction::Transferred`].
-//! [`InventoryAccess`] is the host's veto on both dragging and receiving.
+//! [`InventoryAccess`] is the host's veto on both dragging and receiving;
+//! [`InventoryTransferTarget`] is the host naming *which* other board a
+//! double-click sends items to.
 //!
 //! The held item is never removed from that board's [`InventoryGrid`]
 //! mid-drag — it stays placed at its old cells the whole time, and every
@@ -22,15 +26,26 @@ use bevy::ui::RelativeCursorPosition;
 
 use crate::inventory::config::{InventoryConfig, InventoryTheme};
 use crate::inventory::grid::{self, InventoryGrid};
-use crate::inventory::items::{InventoryItem, InventorySlot};
+use crate::inventory::items::{transfer_item, InventoryItem, InventorySlot};
 use crate::inventory::ui::{place_node, InventoryBoard, Z_ITEM_DRAGGED, Z_ITEM_IDLE};
-use crate::inventory::{InventoryAccess, InventoryWindow};
+use crate::inventory::{InventoryAccess, InventoryTransferTarget, InventoryWindow};
 
 /// The item shown in one board's description panel — set on every press,
 /// dragged or not, which is what makes a plain click "select" for free. A
 /// `Component` on the board entity.
 #[derive(Component, Default)]
 pub struct InventorySelection(pub Option<Entity>);
+
+/// Per-board double-click bookkeeping for [`quick_transfer`]: the item the
+/// last non-drag press on this board landed on, and `Time::elapsed_secs` at
+/// that moment. Cleared by a press on empty space (or on a non-interactive
+/// board), by a press that turns into a drag ([`update_drag`]), by a fired
+/// double-click, and on a window-open/close ([`reset_interaction`]). A
+/// `Component` on the board entity.
+#[derive(Component, Default, Debug)]
+pub struct InventoryClicks {
+    pub last: Option<(Entity, f32)>,
+}
 
 /// Cursor position relative to one board's top-left corner, refreshed every
 /// frame by [`track_cursor`]. A `Component` on the board entity.
@@ -154,6 +169,14 @@ impl InventoryPreview {
 #[derive(Message, Clone, Debug, PartialEq)]
 pub enum InventoryAction {
     Selected {
+        board: Entity,
+        item: Entity,
+    },
+    /// A double-click on `item` — two non-drag presses within
+    /// [`InventoryConfig::double_click_secs`]. Fired whether or not a
+    /// [`quick_transfer`] follows; it's the hook for "equip"/"use"/whatever
+    /// else double-click should mean in your game.
+    Activated {
         board: Entity,
         item: Entity,
     },
@@ -354,6 +377,152 @@ pub fn begin_drag(
     }
 }
 
+/// Two non-drag presses on the same item on the same board within
+/// [`InventoryConfig::double_click_secs`] are a double-click: it fires
+/// [`InventoryAction::Activated`] and, if that board's
+/// [`InventoryTransferTarget`] names another board that's open,
+/// [`interactive`](InventoryAccess::interactive), shares
+/// [`transfers`](InventoryAccess::transfers), and has room, the item moves
+/// there too ([`InventoryAction::Transferred`], via [`transfer_item`]). A
+/// named board with no room instead fires [`InventoryAction::Rejected`];
+/// every other reason it can't land (closed, not interactive, no
+/// `transfers`, no target named) is silent — the same way dragging onto a
+/// refusing board paints no preview.
+///
+/// Runs right after [`begin_drag`] on the `Interaction` chain, reading the
+/// `Held { moved: false, .. }` it just armed instead of re-doing the hit
+/// test. A double-click that lands cancels that armed drag (the item just
+/// moved out from under it); one that doesn't land leaves the press free to
+/// become an ordinary drag on the next frame.
+#[allow(clippy::type_complexity)]
+pub fn quick_transfer(
+    mut commands: Commands,
+    buttons: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
+    mut boards: Query<
+        (
+            Entity,
+            &InventoryCursor,
+            &InventoryWindow,
+            &InventoryAccess,
+            &InventoryConfig,
+            &InventoryTransferTarget,
+            &mut InventoryDragState,
+            &mut InventoryGrid,
+            &mut InventorySelection,
+            &mut InventoryClicks,
+        ),
+        With<InventoryBoard>,
+    >,
+    mut items: Query<(&InventoryItem, &mut InventorySlot, &mut Node)>,
+    mut actions: MessageWriter<InventoryAction>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let now = time.elapsed_secs();
+
+    // The board `begin_drag` just handled this press on — the open board
+    // under the cursor. `fired` is set only once this press completes a
+    // double-click.
+    let mut fired: Option<(Entity, Entity)> = None;
+    for (board, cursor, window, _, config, _, drag, _, _, mut clicks) in &mut boards {
+        if !window.open || !cursor.over_board {
+            continue;
+        }
+        let Some(threshold) = config.double_click_secs else {
+            clicks.last = None;
+            break;
+        };
+        match drag.held_item() {
+            // Empty cell, or a non-interactive board that only selected
+            // (never armed `Held`): doesn't count toward a double-click.
+            None => clicks.last = None,
+            Some(item) => {
+                let is_double = matches!(
+                    clicks.last,
+                    Some((previous, at)) if previous == item && now - at <= threshold
+                );
+                if is_double {
+                    clicks.last = None;
+                    actions.write(InventoryAction::Activated { board, item });
+                    fired = Some((board, item));
+                } else {
+                    clicks.last = Some((item, now));
+                }
+            }
+        }
+        break;
+    }
+
+    let Some((source, item)) = fired else {
+        return;
+    };
+    let (size, origin) = match items.get(item) {
+        Ok((data, slot, _)) => (data.size, slot.0),
+        Err(_) => return,
+    };
+
+    // The source must still be willing to send an item out, and must name a
+    // destination.
+    let target = match boards.get(source) {
+        Ok((.., access, _, transfer_target, _, _, _, _))
+            if access.interactive && access.transfers =>
+        {
+            match transfer_target.0 {
+                Some(target) if target != source => target,
+                _ => return,
+            }
+        }
+        _ => return,
+    };
+
+    // The target must be open, willing to receive, and have room.
+    let to = match boards.get(target) {
+        Ok((_, _, window, access, _, _, _, grid, _, _))
+            if window.open && access.interactive && access.transfers =>
+        {
+            match grid.first_fit(size) {
+                Some(cell) => cell,
+                None => {
+                    actions.write(InventoryAction::Rejected {
+                        board: source,
+                        item,
+                        origin,
+                    });
+                    return;
+                }
+            }
+        }
+        _ => return,
+    };
+
+    let Ok([src_row, tgt_row]) = boards.get_many_mut([source, target]) else {
+        return;
+    };
+    let (_, _, _, _, _, _, mut source_drag, mut source_grid, mut source_sel, _) = src_row;
+    let (_, _, _, _, target_config, _, _, mut target_grid, mut target_sel, _) = tgt_row;
+    let Ok((_, mut slot, mut node)) = items.get_mut(item) else {
+        return;
+    };
+
+    transfer_item(
+        &mut commands,
+        item,
+        size,
+        origin,
+        to,
+        (source, &mut source_grid, &mut source_sel),
+        (target, &mut target_grid, &mut target_sel, target_config),
+        &mut slot,
+        &mut node,
+        &mut actions,
+    );
+    // The item is on another board now — a stale `Held { origin }` here
+    // would be a live bug, not just a redundant state.
+    *source_drag = InventoryDragState::Idle;
+}
+
 /// While held: promotes a press to a real drag once it crosses
 /// [`InventoryConfig::drag_threshold_px`], then keeps the grabbed point glued
 /// to the cursor.
@@ -369,13 +538,14 @@ pub fn update_drag(
             &InventoryAccess,
             &mut InventoryDragState,
             &InventoryWindow,
+            &mut InventoryClicks,
         ),
         With<InventoryBoard>,
     >,
     mut nodes: Query<(&mut Node, &mut ZIndex, &InventoryItem)>,
     mut actions: MessageWriter<InventoryAction>,
 ) {
-    for (board, cursor, config, theme, access, mut drag, window) in &mut boards {
+    for (board, cursor, config, theme, access, mut drag, window, mut clicks) in &mut boards {
         if !window.open {
             continue;
         }
@@ -417,6 +587,9 @@ pub fn update_drag(
                 continue;
             }
             *moved = true;
+            // This press is now a drag, not a click — it can't be one half
+            // of a double-click any more.
+            clicks.last = None;
             actions.write(InventoryAction::PickedUp { board, item: *item });
             if let Ok((_, mut z, _)) = nodes.get_mut(*item) {
                 *z = ZIndex(Z_ITEM_DRAGGED);
@@ -565,24 +738,20 @@ pub fn end_drag(
 
         if landing.is_some_and(|o| target_grid.fits(o, size, Some(drop.item))) {
             let to = landing.unwrap().as_uvec2();
-            source_grid.clear(drop.item);
-            target_grid.place(drop.item, to, size);
-            if source_sel.0 == Some(drop.item) {
-                source_sel.0 = None;
-            }
-            target_sel.0 = Some(drop.item);
             if let Ok((_, mut slot, mut node, _)) = items.get_mut(drop.item) {
-                slot.0 = to;
-                place_node(&mut node, to, size, target_config);
+                transfer_item(
+                    &mut commands,
+                    drop.item,
+                    size,
+                    drop.origin,
+                    to,
+                    (source, &mut source_grid, &mut source_sel),
+                    (drop.target, &mut target_grid, &mut target_sel, target_config),
+                    &mut slot,
+                    &mut node,
+                    &mut actions,
+                );
             }
-            commands.entity(drop.item).insert(ChildOf(drop.target));
-            actions.write(InventoryAction::Transferred {
-                from_board: source,
-                to_board: drop.target,
-                item: drop.item,
-                from: drop.origin,
-                to,
-            });
         } else {
             if let Ok((_, _, mut node, _)) = items.get_mut(drop.item) {
                 place_node(&mut node, drop.origin, size, source_config);
@@ -628,12 +797,13 @@ pub fn reset_interaction(
             &InventoryConfig,
             &mut InventoryDragState,
             &mut InventoryCursor,
+            &mut InventoryClicks,
         ),
         (With<InventoryBoard>, Changed<InventoryWindow>),
     >,
     mut items: Query<(&mut Node, &mut ZIndex, &InventoryItem)>,
 ) {
-    for (config, mut drag, mut cursor) in &mut boards {
+    for (config, mut drag, mut cursor, mut clicks) in &mut boards {
         if let InventoryDragState::Held { item, origin, .. } = &*drag {
             if let Ok((mut node, mut z, data)) = items.get_mut(*item) {
                 place_node(&mut node, *origin, data.size, config);
@@ -643,5 +813,6 @@ pub fn reset_interaction(
         }
         *drag = InventoryDragState::Idle;
         *cursor = InventoryCursor::default();
+        clicks.last = None;
     }
 }

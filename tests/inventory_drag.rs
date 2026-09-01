@@ -13,8 +13,11 @@
 //! frames ourselves — `InputPlugin`'s own `PreUpdate` systems would otherwise
 //! wipe a manually-set `just_pressed` before `Update` reads it.
 
+use std::time::Duration;
+
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
+use bevy::time::Virtual;
 use bevy::ui::RelativeCursorPosition;
 
 use bevy_game_bits::inventory::prelude::*;
@@ -29,13 +32,26 @@ fn medkit() -> InventoryItem {
 
 /// A minimal, headless app with the inventory systems registered but no
 /// board — every test spawns the board(s) it wants.
+///
+/// Virtual time is paused, freezing `Res<Time>::elapsed_secs()` so any two
+/// presses in a test are "simultaneous" and the double-click window always
+/// holds unless [`advance`] walks it forward on purpose.
 fn new_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(InventoryPlugin::headless())
         .insert_resource(ButtonInput::<MouseButton>::default());
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
     app.update();
     app
+}
+
+/// Walks paused virtual time forward, for tests that need two presses to
+/// fall outside [`InventoryConfig::double_click_secs`].
+fn advance(app: &mut App, secs: f32) {
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_secs_f32(secs));
 }
 
 fn spawn_board(app: &mut App, spec: InventoryBoardSpec) -> Entity {
@@ -152,6 +168,14 @@ fn set_access(app: &mut App, board: Entity, interactive: bool, transfers: bool) 
     };
 }
 
+/// Points `board`'s double-click destination at `target`.
+fn link(app: &mut App, board: Entity, target: Entity) {
+    app.world_mut()
+        .get_mut::<InventoryTransferTarget>(board)
+        .unwrap()
+        .0 = Some(target);
+}
+
 /// One frame with `button` freshly pressed, then clears the "just" flag.
 fn press(app: &mut App, button: MouseButton) {
     app.world_mut()
@@ -198,6 +222,19 @@ fn drag_between(app: &mut App, source: Entity, from: UVec2, target: Entity, to: 
     app.update();
     release(app, MouseButton::Left);
     app.update(); // flush the ChildOf reparent
+}
+
+/// Two quick, in-place presses on `cell` of `board` — a double-click. No
+/// trailing `app.update()`: `quick_transfer`'s `ChildOf` reparent already
+/// flushes within the second press's own update (before `InventorySet::Sync`
+/// reads it), and an extra frame here would age the `InventoryAction`
+/// messages out of their two-frame window before a test can drain them.
+fn double_click(app: &mut App, board: Entity, cell: UVec2) {
+    hover_cell(app, board, cell);
+    press(app, MouseButton::Left);
+    release(app, MouseButton::Left);
+    press(app, MouseButton::Left);
+    release(app, MouseButton::Left);
 }
 
 fn cell_count(app: &mut App, board: Entity) -> usize {
@@ -641,4 +678,251 @@ fn a_transfer_moves_the_selection_to_the_receiving_board() {
 
     assert_eq!(selection(&app, stash), None);
     assert_eq!(selection(&app, bag), Some(item));
+}
+
+#[test]
+fn a_double_click_sends_the_item_to_the_named_board() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    double_click(&mut app, stash, UVec2::new(0, 0));
+
+    assert_eq!(parent_of(&app, item), bag);
+    assert_eq!(slot_of(&app, item), UVec2::new(0, 0));
+    assert_eq!(grid_at(&app, bag, UVec2::new(0, 0)), Some(item));
+    assert_eq!(grid_at(&app, stash, UVec2::new(0, 0)), None);
+
+    let actions = drain_actions(&mut app);
+    assert!(actions.iter().any(
+        |a| matches!(a, InventoryAction::Activated { board, item: i } if *board == stash && *i == item)
+    ));
+    assert!(actions.iter().any(|a| matches!(
+        a,
+        InventoryAction::Transferred { from_board, to_board, .. }
+            if *from_board == stash && *to_board == bag
+    )));
+}
+
+#[test]
+fn a_double_click_with_no_named_board_only_reports_activation() {
+    let mut app = new_app();
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    double_click(&mut app, stash, UVec2::new(0, 0));
+
+    assert_eq!(parent_of(&app, item), stash);
+    assert_eq!(slot_of(&app, item), UVec2::new(0, 0));
+
+    let actions = drain_actions(&mut app);
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Activated { .. })));
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Transferred { .. })));
+}
+
+#[test]
+fn a_double_click_needs_transfers_on_both_ends() {
+    for (src_transfers, tgt_transfers) in [(true, true), (true, false), (false, true), (false, false)]
+    {
+        let mut app = new_app();
+        let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+        let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+        link(&mut app, stash, bag);
+        let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+        set_access(&mut app, stash, true, src_transfers);
+        set_access(&mut app, bag, true, tgt_transfers);
+
+        double_click(&mut app, stash, UVec2::new(0, 0));
+
+        if src_transfers && tgt_transfers {
+            assert_eq!(parent_of(&app, item), bag, "{src_transfers},{tgt_transfers}");
+        } else {
+            assert_eq!(
+                parent_of(&app, item),
+                stash,
+                "{src_transfers},{tgt_transfers}"
+            );
+            assert_eq!(slot_of(&app, item), UVec2::new(0, 0));
+        }
+    }
+}
+
+#[test]
+fn a_double_click_to_a_closed_board_does_nothing() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+    app.world_mut()
+        .get_mut::<InventoryWindow>(bag)
+        .unwrap()
+        .open = false;
+    app.update();
+
+    double_click(&mut app, stash, UVec2::new(0, 0));
+
+    assert_eq!(parent_of(&app, item), stash);
+    let actions = drain_actions(&mut app);
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Transferred { .. })));
+}
+
+#[test]
+fn a_double_click_to_a_full_board_is_rejected() {
+    let mut app = new_app();
+    let bag = spawn_board(
+        &mut app,
+        InventoryBoardSpec {
+            config: InventoryConfig {
+                cols: 1,
+                rows: 1,
+                ..default()
+            },
+            ..default()
+        },
+    );
+    spawn_test_item(&mut app, bag, pistol(), UVec2::new(0, 0)); // fills the 1x1
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    double_click(&mut app, stash, UVec2::new(0, 0));
+
+    assert_eq!(parent_of(&app, item), stash);
+    assert_eq!(grid_at(&app, stash, UVec2::new(0, 0)), Some(item));
+    let actions = drain_actions(&mut app);
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Rejected { board, .. } if *board == stash)));
+}
+
+#[test]
+fn two_slow_clicks_are_not_a_double_click() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    hover_cell(&mut app, stash, UVec2::new(0, 0));
+    press(&mut app, MouseButton::Left);
+    release(&mut app, MouseButton::Left);
+    advance(&mut app, 1.0);
+    press(&mut app, MouseButton::Left);
+    release(&mut app, MouseButton::Left);
+
+    assert_eq!(parent_of(&app, item), stash);
+    let actions = drain_actions(&mut app);
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Activated { .. })));
+}
+
+#[test]
+fn a_press_that_became_a_drag_does_not_arm_a_double_click() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    hover_cell(&mut app, stash, UVec2::new(0, 0));
+    press(&mut app, MouseButton::Left);
+    hover_cell(&mut app, stash, UVec2::new(2, 2));
+    app.update(); // update_drag crosses the threshold, clears InventoryClicks
+    release(&mut app, MouseButton::Left);
+
+    hover_cell(&mut app, stash, UVec2::new(2, 2));
+    press(&mut app, MouseButton::Left);
+    release(&mut app, MouseButton::Left);
+
+    let actions = drain_actions(&mut app);
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, InventoryAction::Activated { .. })));
+}
+
+#[test]
+fn a_landed_quick_transfer_leaves_no_drag_armed() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    link(&mut app, stash, bag);
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    double_click(&mut app, stash, UVec2::new(0, 0));
+
+    assert!(matches!(
+        *app.world().get::<InventoryDragState>(stash).unwrap(),
+        InventoryDragState::Idle
+    ));
+    assert!(matches!(
+        *app.world().get::<InventoryDragState>(bag).unwrap(),
+        InventoryDragState::Idle
+    ));
+
+    let before = slot_of(&app, item);
+    release(&mut app, MouseButton::Left);
+    assert_eq!(slot_of(&app, item), before);
+}
+
+#[test]
+fn transfer_moves_an_item_between_boards_without_respawning_it() {
+    let mut app = new_app();
+    let bag = spawn_board(&mut app, InventoryBoardSpec::default());
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    let moved = app
+        .world_mut()
+        .run_system_once(move |mut inv: InventoryCommands| inv.transfer(item, bag))
+        .unwrap();
+    let actions = drain_actions(&mut app);
+
+    assert_eq!(moved, Some(UVec2::new(0, 0)));
+    assert_eq!(parent_of(&app, item), bag);
+    assert_eq!(grid_at(&app, bag, UVec2::new(0, 0)), Some(item));
+    assert_eq!(grid_at(&app, stash, UVec2::new(0, 0)), None);
+    assert!(app.world().get_entity(item).is_ok());
+    assert!(actions.iter().any(|a| matches!(
+        a,
+        InventoryAction::Transferred { from_board, to_board, .. }
+            if *from_board == stash && *to_board == bag
+    )));
+}
+
+#[test]
+fn transfer_to_a_full_board_leaves_it_put() {
+    let mut app = new_app();
+    let bag = spawn_board(
+        &mut app,
+        InventoryBoardSpec {
+            config: InventoryConfig {
+                cols: 1,
+                rows: 1,
+                ..default()
+            },
+            ..default()
+        },
+    );
+    spawn_test_item(&mut app, bag, pistol(), UVec2::new(0, 0)); // fills the 1x1
+    let stash = spawn_board(&mut app, InventoryBoardSpec::default());
+    let item = spawn_test_item(&mut app, stash, pistol(), UVec2::new(0, 0));
+
+    let moved = app
+        .world_mut()
+        .run_system_once(move |mut inv: InventoryCommands| inv.transfer(item, bag))
+        .unwrap();
+
+    assert_eq!(moved, None);
+    assert_eq!(parent_of(&app, item), stash);
+    assert_eq!(grid_at(&app, stash, UVec2::new(0, 0)), Some(item));
 }

@@ -21,7 +21,7 @@ use std::borrow::Cow;
 
 use bevy::prelude::*;
 
-use super::{InventoryAccess, InventoryWindow};
+use super::{InventoryAccess, InventoryTransferTarget, InventoryWindow};
 
 /// The numbers one board's *model* is built out of: how big it is, and where
 /// the line between a click and a drag falls.
@@ -49,6 +49,13 @@ pub struct InventoryConfig {
     /// not a drag. Without it, an in-place click starts (and immediately
     /// cancels) a drag every time.
     pub drag_threshold_px: f32,
+    /// Two non-drag presses on the same item within this many seconds is a
+    /// double-click: it fires [`InventoryAction::Activated`](super::InventoryAction::Activated)
+    /// and, if [`InventoryTransferTarget`] names another board, a
+    /// [`quick_transfer`](super::quick_transfer) to it. `None` turns
+    /// double-click detection off entirely (no `Activated`, no quick
+    /// transfer) — the two presses are just two ordinary clicks.
+    pub double_click_secs: Option<f32>,
     /// Draw each item's name inside its tile. Turn this off if you're going
     /// to insert your own `ImageNode` on the entity [`spawn_item`](super::spawn_item)
     /// returns — or just set [`InventoryItem::icon`](super::InventoryItem::icon).
@@ -80,6 +87,7 @@ impl Default for InventoryConfig {
             item_inset_px: 3.0,
             item_border_px: 2.0,
             drag_threshold_px: 4.0,
+            double_click_secs: Some(0.35),
             show_item_labels: true,
             show_description_panel: true,
             title: Some(Cow::Borrowed("INVENTORY")),
@@ -249,6 +257,10 @@ pub struct InventoryBoardSpec {
     /// The host's veto on dragging (`Default` allows everything). Usually
     /// rewritten every frame once the board is up — see [`InventoryAccess`].
     pub access: InventoryAccess,
+    /// The board a double-click here sends items to (`Default` is `None` —
+    /// no quick transfer). Usually rewritten every frame alongside `access` —
+    /// see [`InventoryTransferTarget`].
+    pub transfer_target: InventoryTransferTarget,
 }
 
 #[cfg(test)]

@@ -4,15 +4,17 @@
 //!
 //! Two shapes, one implementation each. [`InventoryCommands`] is a
 //! `SystemParam` for systems that hold a board [`Entity`]: `add` / `add_at` /
-//! `remove` take effect immediately (and `add*` hand back the spawned
-//! entity), while `resize` enqueues a [`ResizeInventory`] applied at
+//! `remove` / `transfer` / `transfer_at` take effect immediately (and `add*`
+//! / `transfer*` hand back the landing cell or entity), while `resize`
+//! enqueues a [`ResizeInventory`] applied at
 //! [`InventorySet::Commands`](super::InventorySet::Commands). The [`AddItem`]
 //! and [`ResizeInventory`] messages do the same jobs for systems that would
 //! rather not name a board type.
 //!
 //! Every path reports its outcome through [`InventoryAction`] — `Added`,
 //! `AddRejected` (with the item data handed back, so a host can drop the loot
-//! on the floor instead), `Removed`, `Evicted`, `Resized`.
+//! on the floor instead), `Removed`, `Evicted`, `Resized`, `Dropped`/
+//! `Transferred` (from `transfer`/`transfer_at`).
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -20,8 +22,8 @@ use bevy::prelude::*;
 use crate::inventory::config::{InventoryConfig, InventoryTheme};
 use crate::inventory::drag::{InventoryAction, InventoryDragState, InventorySelection};
 use crate::inventory::grid::InventoryGrid;
-use crate::inventory::items::{spawn_item, InventoryItem, InventorySlot};
-use crate::inventory::ui::{rebuild_cells, InventoryBoard, InventoryCell};
+use crate::inventory::items::{spawn_item, transfer_item, InventoryItem, InventorySlot};
+use crate::inventory::ui::{place_node, rebuild_cells, InventoryBoard, InventoryCell};
 
 /// Request to add an item to a board. `origin: None` means "first free
 /// row-major spot, or reject". Fire it from any system; drained at
@@ -59,7 +61,15 @@ pub struct InventoryCommands<'w, 's> {
         With<InventoryBoard>,
     >,
     child_of: Query<'w, 's, &'static ChildOf>,
-    item_data: Query<'w, 's, &'static InventoryItem>,
+    items: Query<
+        'w,
+        's,
+        (
+            &'static InventoryItem,
+            &'static mut InventorySlot,
+            &'static mut Node,
+        ),
+    >,
     resize_writer: MessageWriter<'w, ResizeInventory>,
     actions: MessageWriter<'w, InventoryAction>,
 }
@@ -107,7 +117,7 @@ impl InventoryCommands<'_, '_> {
         let Ok(board) = self.child_of.get(item).map(ChildOf::parent) else {
             return;
         };
-        let data = self.item_data.get(item).ok().cloned();
+        let data = self.items.get(item).ok().map(|(data, ..)| data.clone());
         if let Ok((mut grid, _, _, mut selection)) = self.boards.get_mut(board) {
             grid.clear(item);
             if selection.0 == Some(item) {
@@ -142,6 +152,101 @@ impl InventoryCommands<'_, '_> {
     pub fn resize(&mut self, board: Entity, cols: u32, rows: u32) {
         self.resize_writer
             .write(ResizeInventory { board, cols, rows });
+    }
+
+    /// Move an already-spawned `item` to `to_board`, first free row-major
+    /// spot. Returns the landing cell, or `None` (with an
+    /// [`InventoryAction::Rejected`]) if it fits nowhere — the item stays
+    /// exactly where it was. `to_board` equal to the item's current board is
+    /// a first-fit rearrange and fires [`InventoryAction::Dropped`], not
+    /// `Transferred`.
+    ///
+    /// The host is calling directly, so — like [`add`](Self::add) and
+    /// [`remove`](Self::remove) — this is **not** gated by
+    /// [`InventoryAccess`](super::InventoryAccess); a host doing its own
+    /// double-click or hotkey routing checks reach itself before calling.
+    /// Unlike `remove` + `add`, the item keeps its `Entity` — nothing else
+    /// holding that handle goes stale.
+    pub fn transfer(&mut self, item: Entity, to_board: Entity) -> Option<UVec2> {
+        self.relocate(item, to_board, None)
+    }
+
+    /// [`transfer`](Self::transfer), forcing the landing cell. `None` (with
+    /// an [`InventoryAction::Rejected`]) if `origin` is off `to_board` or
+    /// already occupied.
+    pub fn transfer_at(&mut self, item: Entity, to_board: Entity, origin: UVec2) -> Option<UVec2> {
+        self.relocate(item, to_board, Some(origin))
+    }
+
+    fn relocate(&mut self, item: Entity, to_board: Entity, origin: Option<UVec2>) -> Option<UVec2> {
+        let source = self.child_of.get(item).map(ChildOf::parent).ok()?;
+        let (size, from) = match self.items.get(item) {
+            Ok((data, slot, _)) => (data.size, slot.0),
+            Err(_) => return None,
+        };
+
+        if to_board == source {
+            let (mut grid, config, _, _) = self.boards.get_mut(source).ok()?;
+            let dest = origin
+                .filter(|o| grid.fits(o.as_ivec2(), size, Some(item)))
+                .or_else(|| grid.first_fit(size));
+            let Some(dest) = dest else {
+                self.actions.write(InventoryAction::Rejected {
+                    board: source,
+                    item,
+                    origin: from,
+                });
+                return None;
+            };
+            grid.clear(item);
+            grid.place(item, dest, size);
+            if let Ok((_, mut slot, mut node)) = self.items.get_mut(item) {
+                slot.0 = dest;
+                place_node(&mut node, dest, size, config);
+            }
+            self.actions.write(InventoryAction::Dropped {
+                board: source,
+                item,
+                from,
+                to: dest,
+            });
+            return Some(dest);
+        }
+
+        let dest = {
+            let (grid, ..) = self.boards.get(to_board).ok()?;
+            match origin {
+                Some(o) if grid.fits(o.as_ivec2(), size, None) => Some(o),
+                Some(_) => None,
+                None => grid.first_fit(size),
+            }
+        };
+        let Some(dest) = dest else {
+            self.actions.write(InventoryAction::Rejected {
+                board: source,
+                item,
+                origin: from,
+            });
+            return None;
+        };
+
+        let [src_row, tgt_row] = self.boards.get_many_mut([source, to_board]).ok()?;
+        let (mut source_grid, _, _, mut source_sel) = src_row;
+        let (mut target_grid, target_config, _, mut target_sel) = tgt_row;
+        let (_, mut slot, mut node) = self.items.get_mut(item).ok()?;
+        transfer_item(
+            &mut self.commands,
+            item,
+            size,
+            from,
+            dest,
+            (source, &mut source_grid, &mut source_sel),
+            (to_board, &mut target_grid, &mut target_sel, target_config),
+            &mut slot,
+            &mut node,
+            &mut self.actions,
+        );
+        Some(dest)
     }
 }
 
