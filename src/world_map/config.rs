@@ -48,15 +48,15 @@ pub struct WorldMapConfig {
     /// for [`track_intercepts`](super::track_intercepts) to register contact.
     /// `None` disables interception entirely.
     pub intercept_radius_tiles: Option<f32>,
-    /// How far above the token, in world units, the "interact" widget squares
-    /// sit.
+    /// How far above the token, in world units, the "interact" square sits.
     pub interact_widget_offset_px: f32,
-    /// Half the edge length, in world units, of one "interact" widget square —
-    /// its click hit box and its drawn size both.
+    /// Half the edge length, in world units, of the "interact" square — its
+    /// click hit box and its drawn size both.
     pub interact_widget_half_px: f32,
-    /// Gap, in world units, between the two "interact" widget squares when both
-    /// a location and a party are in reach.
-    pub interact_widget_gap_px: f32,
+    /// Verb the interact menu's location row reads — `"{enter_verb} {name}"`.
+    pub enter_verb: Cow<'static, str>,
+    /// Verb the interact menu's party rows read — `"{hail_verb} {name}"`.
+    pub hail_verb: Cow<'static, str>,
     /// Heading shown above the aside list. `None` draws no heading row.
     pub title: Option<Cow<'static, str>>,
     /// Show the live `you … · cursor …` tile-coordinate line in the aside — the
@@ -83,7 +83,8 @@ impl Default for WorldMapConfig {
             intercept_radius_tiles: Some(0.35),
             interact_widget_offset_px: 26.0,
             interact_widget_half_px: 11.0,
-            interact_widget_gap_px: 6.0,
+            enter_verb: Cow::Borrowed("Enter"),
+            hail_verb: Cow::Borrowed("Hail"),
             title: Some(Cow::Borrowed("WORLD MAP")),
             show_coords: true,
             pause_time_when_idle: true,
@@ -120,10 +121,18 @@ pub struct WorldMapTheme {
     /// Half-diagonal of a [`Party`](super::Party)'s diamond token.
     pub party_radius_px: f32,
     pub party_label_color: Color,
-    /// Fill of the "interact" widget square over an intercepted party (the
-    /// location square uses [`enter_widget_color`](Self::enter_widget_color)).
-    pub party_widget_color: Color,
-    pub enter_widget_color: Color,
+    /// Fill of the single "interact" square over the player token.
+    pub interact_widget_color: Color,
+    /// Popup panel behind the interact square when it lists more than one thing.
+    pub menu_background: Color,
+    pub menu_row_background: Color,
+    pub menu_row_hover_background: Color,
+    pub menu_text_color: Color,
+    pub menu_font_size: f32,
+    pub menu_padding_px: f32,
+    pub menu_row_gap_px: f32,
+    /// Gap, in screen pixels, between the interact square and the popup's edge.
+    pub menu_offset_px: f32,
     pub z_tiles: f32,
     pub z_target: f32,
     pub z_locations: f32,
@@ -131,7 +140,7 @@ pub struct WorldMapTheme {
     /// Party tokens sit just under the player token.
     pub z_party: f32,
     pub z_traveler: f32,
-    pub z_enter_widget: f32,
+    pub z_interact_widget: f32,
     pub aside_background: Color,
     pub aside_heading_color: Color,
     pub aside_heading_font_size: f32,
@@ -168,15 +177,22 @@ impl Default for WorldMapTheme {
             target_marker_color: Color::srgba(0.95, 0.35, 0.3, 0.7),
             party_radius_px: 7.0,
             party_label_color: Color::srgb(0.9, 0.9, 0.82),
-            party_widget_color: Color::srgb(0.55, 0.75, 0.95),
-            enter_widget_color: Color::srgb(0.4, 0.9, 0.5),
+            interact_widget_color: Color::srgb(0.4, 0.9, 0.5),
+            menu_background: Color::srgba(0.10, 0.11, 0.14, 0.98),
+            menu_row_background: Color::srgba(1.0, 1.0, 1.0, 0.05),
+            menu_row_hover_background: Color::srgba(0.4, 0.9, 0.5, 0.22),
+            menu_text_color: Color::srgb(0.92, 0.9, 0.84),
+            menu_font_size: 13.0,
+            menu_padding_px: 8.0,
+            menu_row_gap_px: 4.0,
+            menu_offset_px: 6.0,
             z_tiles: 0.0,
             z_target: 1.0,
             z_locations: 2.0,
             z_labels: 3.0,
             z_party: 3.5,
             z_traveler: 4.0,
-            z_enter_widget: 5.0,
+            z_interact_widget: 5.0,
             aside_background: Color::srgba(0.10, 0.11, 0.14, 0.96),
             aside_heading_color: Color::srgb(0.92, 0.89, 0.84),
             aside_heading_font_size: 18.0,

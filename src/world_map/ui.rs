@@ -18,9 +18,10 @@ use crate::world_map::config::{
 use crate::world_map::data::{tile_to_world, WorldMapData, WorldMapGrid};
 use crate::world_map::time::WorldMapClock;
 use crate::world_map::travel::{
-    interact_widget_layout, traveler_world, AtLocation, Discovered, InteractSubject, Intercepting,
-    Location, Party, PlayerTraveler, SecretLocation, Spotted, TilePos, TravelProgress,
-    TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor, WorldMapTime,
+    interact_subjects, interact_widget_center, traveler_world, write_subject_action, AtLocation,
+    Discovered, InteractMenu, InteractSubject, Intercepting, Location, Party, PlayerTraveler,
+    SecretLocation, Spotted, TilePos, TravelProgress, TravelTarget, Traveler, WorldMapAction,
+    WorldMapCamera, WorldMapCursor, WorldMapTime,
 };
 
 /// Marks the root entity of one map — carries every per-map component and is
@@ -62,6 +63,9 @@ pub struct WorldMapParts {
     /// [`WorldMapConfig::show_coords`](super::WorldMapConfig::show_coords) is
     /// false.
     pub coords_label: Entity,
+    /// The absolutely-positioned "interact" menu popup. `Display::None` while
+    /// closed; [`InteractMenuRow`]s hang off it.
+    pub interact_menu: Entity,
 }
 
 /// One terrain tile quad. `ChildOf` the map.
@@ -73,13 +77,22 @@ pub struct WorldMapTile;
 #[derive(Component)]
 pub struct TargetMarker(pub Entity);
 
-/// One square of the clickable "interact" widget over the player token. Two per
-/// player traveller: `slot` 0 acts on the location under the token, `slot` 1 on
-/// an intercepted [`Party`]. Each shows only when its subject is present.
+/// The single clickable "interact" square over the player token — one per
+/// player traveller. Shown by [`sync_interact_widgets`] whenever there's at
+/// least one thing in reach; a click on it either acts immediately or opens the
+/// [`InteractMenu`].
 #[derive(Component)]
 pub struct InteractWidget {
     pub traveler: Entity,
-    pub slot: usize,
+}
+
+/// One row of the open [`InteractMenu`] — a `Button` child of the menu root.
+/// `subject` is what a press acts on.
+#[derive(Component, Clone, Copy)]
+pub struct InteractMenuRow {
+    pub map: Entity,
+    pub traveler: Entity,
+    pub subject: InteractSubject,
 }
 
 /// Set once [`build_party_visuals`] has drawn a [`Party`]'s token, so it draws
@@ -201,6 +214,23 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
         ))
         .id();
 
+    // --- interact menu popup (starts closed) -----------------------------
+    let interact_menu = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                display: Display::None,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(theme.menu_row_gap_px),
+                padding: UiRect::all(Val::Px(theme.menu_padding_px)),
+                ..default()
+            },
+            BackgroundColor(theme.menu_background),
+            // A hover target, so `handle_click` sees a click that landed here.
+            Interaction::default(),
+        ))
+        .id();
+
     // --- map entity ------------------------------------------------------
     commands
         .spawn((
@@ -211,6 +241,7 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
             layout,
             WorldMapCursor::default(),
             WorldMapTime::default(),
+            InteractMenu::default(),
             Transform::default(),
             Visibility::default(),
             WorldMapParts {
@@ -219,6 +250,7 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
                 status_text,
                 clock_label,
                 coords_label,
+                interact_menu,
             },
         ))
         .id()
@@ -304,8 +336,7 @@ pub fn resolve_map(
             ))
             .id();
         commands.spawn((TargetMarker(traveler), map_child(map)));
-        commands.spawn((InteractWidget { traveler, slot: 0 }, map_child(map)));
-        commands.spawn((InteractWidget { traveler, slot: 1 }, map_child(map)));
+        commands.spawn((InteractWidget { traveler }, map_child(map)));
 
         // Locations. `from_data` succeeded above, so `tile_pos()` is `Some`.
         for location in &data.locations {
@@ -466,14 +497,12 @@ pub fn build_map_visuals(
             ));
         }
 
-        // Interact widget — one square mesh, a green material for the "enter a
-        // location" slot and a cooler one for the "hail a party" slot.
+        // Interact square — one mesh, one material.
         let square = meshes.add(Rectangle::new(
             2.0 * config.interact_widget_half_px,
             2.0 * config.interact_widget_half_px,
         ));
-        let enter_mat = materials.add(ColorMaterial::from(theme.enter_widget_color));
-        let party_mat = materials.add(ColorMaterial::from(theme.party_widget_color));
+        let square_mat = materials.add(ColorMaterial::from(theme.interact_widget_color));
         for (entity, widget) in &widgets {
             let Ok((_, traveler)) = tokens.get(widget.traveler) else {
                 continue;
@@ -481,14 +510,9 @@ pub fn build_map_visuals(
             if traveler.map != map {
                 continue;
             }
-            let mat = if widget.slot == 0 {
-                &enter_mat
-            } else {
-                &party_mat
-            };
             commands
                 .entity(entity)
-                .insert((Mesh2d(square.clone()), MeshMaterial2d(mat.clone())));
+                .insert((Mesh2d(square.clone()), MeshMaterial2d(square_mat.clone())));
         }
 
         // Location circles + name labels. Secrets get their own smaller dot.
@@ -640,10 +664,10 @@ pub fn sync_target_marker(
     }
 }
 
-/// Positions and shows/hides the two "interact" widget squares, reading the same
-/// [`interact_widget_layout`](super::interact_widget_layout) the click hit test
-/// does — so the square drawn is the square clicked. Slot 0 shows while the
-/// player stands on a location, slot 1 while a [`Party`] is intercepted.
+/// Positions and shows/hides the single "interact" square, reading the same
+/// [`interact_widget_center`](super::interact_widget_center) the click hit test
+/// does — so the square drawn is the square clicked. Shown whenever
+/// [`interact_subjects`](super::interact_subjects) is non-empty.
 pub fn sync_interact_widgets(
     maps: Query<(&WorldMapGrid, &WorldMapConfig, &WorldMapTheme)>,
     travelers: Query<(&Traveler, &TilePos, &AtLocation, &Intercepting)>,
@@ -657,17 +681,147 @@ pub fn sync_interact_widgets(
         let Ok((grid, config, theme)) = maps.get(traveler.map) else {
             continue;
         };
+        if interact_subjects(at, intercepting).is_empty() {
+            *vis = Visibility::Hidden;
+            continue;
+        }
         let here = traveler_world(grid, pos.0);
-        let subjects = [
-            at.0.map(InteractSubject::Location),
-            intercepting.0.map(InteractSubject::Party),
-        ];
-        match interact_widget_layout(here, subjects, config)[widget.slot] {
-            Some((_, center)) => {
-                tf.translation = center.extend(theme.z_enter_widget);
-                *vis = Visibility::Inherited;
+        tf.translation = interact_widget_center(here, config).extend(theme.z_interact_widget);
+        *vis = Visibility::Inherited;
+    }
+}
+
+/// Draws and places the [`InteractMenu`] popup. Not visuals-gated — the rows are
+/// plain `Node`/`Text`, the way [`AsideRow`]s are, so it runs headless too.
+///
+/// Per map: while closed, the root is `Display::None` and any rows are despawned.
+/// While open it recomputes the live [`interact_subjects`](super::interact_subjects),
+/// closes if they've emptied, rebuilds the rows only when the set actually
+/// changed, hover-paints them, and anchors the root off the interact square's
+/// screen position.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn sync_interact_menu(
+    mut commands: Commands,
+    camera: Query<(&Camera, &GlobalTransform), With<WorldMapCamera>>,
+    mut maps: Query<(
+        Entity,
+        &WorldMapGrid,
+        &WorldMapConfig,
+        &WorldMapTheme,
+        &WorldMapParts,
+        &mut InteractMenu,
+    )>,
+    travelers: Query<(&Traveler, &TilePos, &AtLocation, &Intercepting), With<PlayerTraveler>>,
+    locations: Query<&Location>,
+    parties: Query<&Party>,
+    rows: Query<(Entity, &InteractMenuRow)>,
+    mut row_styles: Query<(&InteractMenuRow, &Interaction, &mut BackgroundColor)>,
+    mut nodes: Query<&mut Node>,
+) {
+    for (map, grid, config, theme, parts, mut menu) in &mut maps {
+        let root = parts.interact_menu;
+
+        // Resolve the open state against what's actually in reach right now.
+        let live = menu.traveler.and_then(|tv| {
+            let (t, pos, at, intercepting) = travelers.get(tv).ok()?;
+            if t.map != map {
+                return None;
             }
-            None => *vis = Visibility::Hidden,
+            let subjects = interact_subjects(at, intercepting);
+            (!subjects.is_empty()).then_some((tv, pos.0, subjects))
+        });
+
+        let Some((tv, tile, subjects)) = live else {
+            if menu.is_open() || !menu.subjects.is_empty() {
+                menu.close();
+            }
+            if let Ok(mut node) = nodes.get_mut(root) {
+                if node.display != Display::None {
+                    node.display = Display::None;
+                }
+            }
+            for (row_e, row) in &rows {
+                if row.map == map {
+                    commands.entity(row_e).despawn();
+                }
+            }
+            continue;
+        };
+
+        // Rebuild the rows only when the subject set changed.
+        if menu.subjects != subjects {
+            for (row_e, row) in &rows {
+                if row.map == map {
+                    commands.entity(row_e).despawn();
+                }
+            }
+            for &subject in &subjects {
+                let label = match subject {
+                    InteractSubject::Location(e) => format!(
+                        "{} {}",
+                        config.enter_verb,
+                        locations.get(e).map(|l| l.name.as_str()).unwrap_or("here")
+                    ),
+                    InteractSubject::Party(e) => format!(
+                        "{} {}",
+                        config.hail_verb,
+                        parties.get(e).map(|p| p.name.as_str()).unwrap_or("party")
+                    ),
+                };
+                commands.spawn((
+                    InteractMenuRow {
+                        map,
+                        traveler: tv,
+                        subject,
+                    },
+                    Button,
+                    Node {
+                        padding: UiRect::all(Val::Px(theme.menu_padding_px)),
+                        ..default()
+                    },
+                    BackgroundColor(theme.menu_row_background),
+                    ChildOf(root),
+                    children![(
+                        Text::new(label),
+                        TextFont {
+                            font_size: theme.menu_font_size,
+                            ..default()
+                        },
+                        TextColor(theme.menu_text_color),
+                    )],
+                ));
+            }
+            menu.subjects = subjects;
+        }
+
+        // Hover paint.
+        for (row, interaction, mut bg) in &mut row_styles {
+            if row.map != map {
+                continue;
+            }
+            let wanted = match interaction {
+                Interaction::Hovered | Interaction::Pressed => theme.menu_row_hover_background,
+                Interaction::None => theme.menu_row_background,
+            };
+            if bg.0 != wanted {
+                bg.0 = wanted;
+            }
+        }
+
+        // Anchor the popup just off the square's top-right corner.
+        let here = traveler_world(grid, tile);
+        let center = interact_widget_center(here, config);
+        let screen = camera
+            .iter()
+            .next()
+            .and_then(|(cam, tf)| cam.world_to_viewport(tf, center.extend(0.0)).ok());
+        if let Ok(mut node) = nodes.get_mut(root) {
+            node.display = Display::Flex;
+            if let Some(screen) = screen {
+                node.left =
+                    Val::Px(screen.x + config.interact_widget_half_px + theme.menu_offset_px);
+                node.top = Val::Px(screen.y - config.interact_widget_half_px);
+            }
         }
     }
 }
@@ -959,6 +1113,25 @@ pub fn travel_to_aside_row(
             map: row.map,
             location: row.location,
         });
+    }
+}
+
+/// Resolves a click on an [`InteractMenuRow`] — fires the subject's action
+/// ([`WorldMapAction::EnterRequested`] / [`WorldMapAction::InteractRequested`])
+/// and closes the menu. Mirrors [`travel_to_aside_row`].
+pub fn pick_interact_menu_row(
+    rows: Query<(&InteractMenuRow, &Interaction), Changed<Interaction>>,
+    mut menus: Query<&mut InteractMenu>,
+    mut actions: MessageWriter<WorldMapAction>,
+) {
+    for (row, interaction) in &rows {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        write_subject_action(&mut actions, row.map, row.traveler, row.subject);
+        if let Ok(mut menu) = menus.get_mut(row.map) {
+            menu.close();
+        }
     }
 }
 

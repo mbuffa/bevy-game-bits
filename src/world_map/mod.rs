@@ -75,13 +75,17 @@
 //! [`TravelTarget`] and
 //! flips its [`Spotted`] flag to say whether the player sees it (the seam a
 //! spot-at-a-distance or radio feature plugs into). What it *does* own is
-//! contact — [`track_intercepts`] sets the player's [`Intercepting`] and fires
-//! [`WorldMapAction::PartyIntercepted`] when a party comes within
-//! [`WorldMapConfig::intercept_radius_tiles`], swept so a fast frame can't
-//! tunnel through. The "enter" affordance is now a square "interact" widget:
-//! two squares side by side when you're on a location and intercepting a party,
-//! each firing its own action. Only the [`PlayerTraveler`] is steered by
-//! clicks — a caravan isn't.
+//! contact — [`track_intercepts`] keeps the player's [`Intercepting`] list of
+//! *every* party within [`WorldMapConfig::intercept_radius_tiles`] (swept so a
+//! fast frame can't tunnel through) and fires a
+//! [`WorldMapAction::PartyIntercepted`] per one that enters it. The "enter"
+//! affordance is a single square "interact" widget over the token: with one
+//! thing in reach a click acts immediately (enter the town / hail the party),
+//! with several it opens the [`InteractMenu`] to choose from. Only the
+//! [`PlayerTraveler`] is steered by clicks — a caravan isn't. A host that wants
+//! its own menu UI reads [`InteractMenu`] / [`Intercepting`] and writes
+//! [`WorldMapAction::EnterRequested`] / [`WorldMapAction::InteractRequested`]
+//! itself.
 //!
 //! - [`ui`] — [`spawn_world_map`], the tile/token drawing, the aside, and the
 //!   camera.
@@ -95,10 +99,10 @@
 //!
 //! There's no pathfinding — routing around the mountains is the player's job.
 //! Terrain is sampled once per frame at the traveller's current cell, so a
-//! single fast frame could skim the corner of a slow tile. The interact-widget
-//! squares sit just above the token, so a click on the very next tile up, close
-//! to the token, can read as "interact" rather than "travel". The camera
-//! systems assume one map is on screen at a time.
+//! single fast frame could skim the corner of a slow tile. The interact square
+//! sits just above the token, so a click on the very next tile up, close to the
+//! token, can read as "interact" rather than "travel". The camera systems
+//! assume one map is on screen at a time.
 
 pub mod asset;
 pub mod config;
@@ -120,31 +124,32 @@ pub use data::{
 };
 pub use time::{advance_clock, WorldMapClock, WorldMapTimePlugin};
 pub use travel::{
-    cancel_target, handle_click, in_interact_square, interact_widget_layout, party_bundle,
-    point_segment_distance, reveal_locations, tick_world_time, time_advancing, track_cursor,
-    track_intercepts, track_location, travel, AtLocation, Discovered, InteractSubject,
-    Intercepting, Location, Party, PlayerTraveler, SecretLocation, Spotted, TilePos,
-    TravelProgress, TravelSpeed, TravelTarget, Traveler, WorldClockHold, WorldMapAction,
+    cancel_target, handle_click, in_interact_square, interact_subjects, interact_widget_center,
+    party_bundle, point_segment_distance, reveal_locations, tick_world_time, time_advancing,
+    track_cursor, track_intercepts, track_location, travel, AtLocation, Discovered, InteractMenu,
+    InteractSubject, Intercepting, Location, Party, PlayerTraveler, SecretLocation, Spotted,
+    TilePos, TravelProgress, TravelSpeed, TravelTarget, Traveler, WorldClockHold, WorldMapAction,
     WorldMapCamera, WorldMapCursor, WorldMapTime,
 };
 pub use ui::{
     build_map_visuals, build_party_visuals, follow_and_clamp_camera, pan_camera,
-    refollow_on_new_target, resolve_map, spawn_world_map, sync_aside, sync_clock_label,
-    sync_coords_label, sync_interact_widgets, sync_location_visibility, sync_party_visibility,
-    sync_status_text, sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow,
-    InteractWidget, TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile, WorldMapView,
+    pick_interact_menu_row, refollow_on_new_target, resolve_map, spawn_world_map, sync_aside,
+    sync_clock_label, sync_coords_label, sync_interact_menu, sync_interact_widgets,
+    sync_location_visibility, sync_party_visibility, sync_status_text, sync_target_marker,
+    sync_traveler_transform, travel_to_aside_row, AsideRow, InteractMenuRow, InteractWidget,
+    TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile, WorldMapView,
 };
 
 /// Everything you need to build and drive a world map, in one import.
 pub mod prelude {
     pub use super::{
         cell_of, party_bundle, spawn_world_map, tile_to_world, world_to_tile, AsideSide,
-        AtLocation, DefaultWorldMap, Discovered, InteractSubject, Intercepting, Location, Party,
-        PlayerTraveler, SecretLocation, Spotted, TilePos, TravelProgress, TravelSpeed,
-        TravelTarget, Traveler, WorldClockHold, WorldMapAction, WorldMapCamera, WorldMapClock,
-        WorldMapConfig, WorldMapCursor, WorldMapData, WorldMapGrid, WorldMapLayout, WorldMapPlugin,
-        WorldMapSet, WorldMapSource, WorldMapSpec, WorldMapTheme, WorldMapTime, WorldMapTimePlugin,
-        WorldMapView,
+        AtLocation, DefaultWorldMap, Discovered, InteractMenu, InteractSubject, Intercepting,
+        Location, Party, PlayerTraveler, SecretLocation, Spotted, TilePos, TravelProgress,
+        TravelSpeed, TravelTarget, Traveler, WorldClockHold, WorldMapAction, WorldMapCamera,
+        WorldMapClock, WorldMapConfig, WorldMapCursor, WorldMapData, WorldMapGrid, WorldMapLayout,
+        WorldMapPlugin, WorldMapSet, WorldMapSource, WorldMapSpec, WorldMapTheme, WorldMapTime,
+        WorldMapTimePlugin, WorldMapView,
     };
 }
 
@@ -243,6 +248,7 @@ impl Plugin for WorldMapPlugin {
                     (
                         travel::track_cursor,
                         travel::handle_click,
+                        ui::pick_interact_menu_row,
                         travel::cancel_target,
                         ui::travel_to_aside_row,
                         ui::refollow_on_new_target,
@@ -269,6 +275,7 @@ impl Plugin for WorldMapPlugin {
                 (
                     ui::sync_target_marker,
                     ui::sync_interact_widgets,
+                    ui::sync_interact_menu,
                     ui::sync_location_visibility,
                     ui::sync_party_visibility,
                     ui::sync_aside,

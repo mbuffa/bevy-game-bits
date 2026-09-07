@@ -7,7 +7,9 @@
 //! current trip. The arrow keys pan the map; while you're travelling the
 //! camera follows the token until you pan away. Walk onto a town and a green
 //! square appears over the token — click it to "enter" (this example just
-//! logs it). Click a row in the sidebar to set course for that place.
+//! logs it). When more than one thing is in reach — a town *and* a caravan
+//! standing on it — that one square pops a small menu to pick from; `Escape`
+//! closes it. Click a row in the sidebar to set course for that place.
 //! Walk near the hidden ruin and it appears in the sidebar.
 //!
 //! Two of the map's places are *secret* — a wrecked convoy near `6.35, 7.80`
@@ -20,8 +22,10 @@
 //! Sands and Junktown, and fast **Raiders** cycling the middle. They're the
 //! *host's* to drive: this example gives each a hand-rolled `Patrol` and a
 //! `spot_parties` stand-in for the eventual "you spot them at a distance" rule
-//! (they stay hidden until you're within 3 tiles). Walk into one and a second
-//! square appears over the token — click it to hail them.
+//! (they stay hidden until you're within 3 tiles). Walk into one and the
+//! interact square's menu gains a "Hail" row for it. You start on Shady Sands
+//! with the Water Caravan on top of you, so the very first click on the square
+//! already pops a two-row menu.
 //!
 //! **The world only moves while you do.** Stop, and the caravans freeze with
 //! you (and the clock stops) — so line one up and step forward to intercept it.
