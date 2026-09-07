@@ -10,6 +10,12 @@
 //! logs it). Click a row in the sidebar to set course for that place.
 //! Walk near the hidden ruin and it appears in the sidebar.
 //!
+//! Two of the map's places are *secret* — a wrecked convoy near `6.35, 7.80`
+//! and a spring near `3.15, 1.60`. A real game would hand those coordinates to
+//! you as a quest; here they're written above. You only uncover one by walking
+//! almost exactly over the point, so aim with the live `you … · cursor …`
+//! readout in the sidebar and click the spot precisely.
+//!
 //! The map, its terrain palette and its locations all come from
 //! `assets/maps/wastes.worldmap.json` — the library never sees a hard-coded
 //! tile. The clock in the sidebar (`WorldMapTimePlugin`) only advances while
@@ -41,7 +47,11 @@ fn spawn_camera(mut commands: Commands) {
 
 /// `WorldMapAction` -> a log line. The `match` is exhaustive on purpose: a new
 /// variant should make this example stop compiling until it's handled.
-fn log_world_map_actions(mut actions: MessageReader<WorldMapAction>, locations: Query<&Location>) {
+fn log_world_map_actions(
+    mut actions: MessageReader<WorldMapAction>,
+    locations: Query<&Location>,
+    secrets: Query<(), With<SecretLocation>>,
+) {
     let name = |e: Entity| {
         locations
             .get(e)
@@ -63,7 +73,11 @@ fn log_world_map_actions(mut actions: MessageReader<WorldMapAction>, locations: 
             }
             WorldMapAction::LocationLeft { location, .. } => info!("left {}", name(*location)),
             WorldMapAction::LocationDiscovered { location, .. } => {
-                info!("discovered {}", name(*location))
+                if secrets.contains(*location) {
+                    info!("found the secret at {}!", name(*location))
+                } else {
+                    info!("discovered {}", name(*location))
+                }
             }
             WorldMapAction::LocationFocused { location, .. } => {
                 info!("selected {}", name(*location))

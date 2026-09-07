@@ -46,6 +46,15 @@
 //! - [`travel`] — the traveller, its [`TravelTarget`], the movement step, the
 //!   location bookkeeping, and [`WorldMapAction`], the message the module
 //!   fires instead of acting itself.
+//!
+//! # Two kinds of hidden place
+//!
+//! An ordinary undiscovered location is spotted from a way off — anywhere
+//! within [`WorldMapConfig::reveal_radius_tiles`]. A [`SecretLocation`] (a
+//! buried cache, a wreck — the anchor of a treasure hunt) reveals only when
+//! the traveller walks almost exactly over it, within the far tighter
+//! [`WorldMapConfig::secret_reveal_radius_tiles`]. The check sweeps the whole
+//! segment travelled each frame, so a fast frame can't skip the spot.
 //! - [`ui`] — [`spawn_world_map`], the tile/token drawing, the aside, and the
 //!   camera.
 //! - [`time`] — the optional [`WorldMapClock`] and [`WorldMapTimePlugin`].
@@ -83,25 +92,26 @@ pub use data::{
 };
 pub use time::{advance_clock, WorldMapClock, WorldMapTimePlugin};
 pub use travel::{
-    cancel_target, handle_click, reveal_locations, track_cursor, track_location, travel,
-    AtLocation, Discovered, Location, TilePos, TravelProgress, TravelTarget, Traveler,
-    WorldMapAction, WorldMapCamera, WorldMapCursor,
+    cancel_target, handle_click, point_segment_distance, reveal_locations, track_cursor,
+    track_location, travel, AtLocation, Discovered, Location, SecretLocation, TilePos,
+    TravelProgress, TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor,
 };
 pub use ui::{
     build_map_visuals, follow_and_clamp_camera, pan_camera, refollow_on_new_target, resolve_map,
-    spawn_world_map, sync_aside, sync_clock_label, sync_enter_widget, sync_location_visibility,
-    sync_status_text, sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow,
-    EnterWidget, TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile, WorldMapView,
+    spawn_world_map, sync_aside, sync_clock_label, sync_coords_label, sync_enter_widget,
+    sync_location_visibility, sync_status_text, sync_target_marker, sync_traveler_transform,
+    travel_to_aside_row, AsideRow, EnterWidget, TargetMarker, WorldMapParts, WorldMapRoot,
+    WorldMapTile, WorldMapView,
 };
 
 /// Everything you need to build and drive a world map, in one import.
 pub mod prelude {
     pub use super::{
         cell_of, spawn_world_map, tile_to_world, world_to_tile, AsideSide, AtLocation,
-        DefaultWorldMap, Discovered, Location, TilePos, TravelProgress, TravelTarget, Traveler,
-        WorldMapAction, WorldMapCamera, WorldMapClock, WorldMapConfig, WorldMapCursor,
-        WorldMapData, WorldMapGrid, WorldMapLayout, WorldMapPlugin, WorldMapSet, WorldMapSource,
-        WorldMapSpec, WorldMapTheme, WorldMapTimePlugin, WorldMapView,
+        DefaultWorldMap, Discovered, Location, SecretLocation, TilePos, TravelProgress,
+        TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapClock, WorldMapConfig,
+        WorldMapCursor, WorldMapData, WorldMapGrid, WorldMapLayout, WorldMapPlugin, WorldMapSet,
+        WorldMapSource, WorldMapSpec, WorldMapTheme, WorldMapTimePlugin, WorldMapView,
     };
 }
 
@@ -227,6 +237,7 @@ impl Plugin for WorldMapPlugin {
                     ui::sync_location_visibility,
                     ui::sync_aside,
                     ui::sync_clock_label,
+                    ui::sync_coords_label,
                     ui::sync_status_text,
                     (ui::sync_traveler_transform, ui::follow_and_clamp_camera).chain(),
                 )

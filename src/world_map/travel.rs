@@ -56,6 +56,11 @@ pub struct TravelProgress {
     /// Straight-line tiles still between the traveller and its target (`0.0`
     /// with no target).
     pub tiles_remaining: f32,
+    /// Where the traveller stood at the **start** of this frame — equal to the
+    /// current [`TilePos`] when it didn't move. [`reveal_locations`] sweeps the
+    /// `from → TilePos` segment so a single fast frame can't skip a tiny
+    /// [`SecretLocation`].
+    pub from: Vec2,
 }
 
 /// The cursor's position over one map, refreshed every frame by
@@ -73,16 +78,33 @@ pub struct WorldMapCursor {
 }
 
 /// One named place on the map. A `Component` on a child of the map entity,
-/// spawned by [`build_world_map`](super::build_world_map) from a
+/// spawned by [`resolve_map`](super::resolve_map) from a
 /// [`LocationData`](super::LocationData).
 #[derive(Component, Clone, Debug)]
 pub struct Location {
     pub id: String,
     pub name: String,
-    /// Which tile it sits on.
-    pub cell: UVec2,
+    /// Where it sits, in **tile space** — a cell centre for a tile-anchored
+    /// place, an arbitrary float point for a [`SecretLocation`].
+    pub pos: Vec2,
     pub description: Option<String>,
 }
+
+impl Location {
+    /// The cell [`pos`](Self::pos) falls in.
+    pub fn cell(&self) -> IVec2 {
+        cell_of(self.pos)
+    }
+}
+
+/// Marker on a [`Location`] that only reveals when the traveller walks almost
+/// exactly over [`Location::pos`] — [`WorldMapConfig::secret_reveal_radius_tiles`],
+/// not the wide [`reveal_radius_tiles`](WorldMapConfig::reveal_radius_tiles) an
+/// ordinary place is spotted from. Filter with `With<SecretLocation>` /
+/// `Has<SecretLocation>`; discovery still arrives as
+/// [`WorldMapAction::LocationDiscovered`].
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct SecretLocation;
 
 /// Whether a [`Location`] is known yet. Starts from
 /// [`LocationData::discovered`](super::LocationData::discovered); flipped to
@@ -270,6 +292,7 @@ pub fn travel(
     let dt = time.delta_secs();
     for (traveler_e, traveler, mut pos, mut target, mut progress) in &mut travelers {
         *progress = TravelProgress::default();
+        progress.from = pos.0;
 
         let Ok((grid, config)) = maps.get(traveler.map) else {
             continue;
@@ -314,15 +337,37 @@ pub fn travel(
     }
 }
 
-/// Reveals a hidden location when a traveller passes within
-/// [`WorldMapConfig::reveal_radius_tiles`] of its centre.
+/// Distance from point `p` to the segment `a → b` (endpoints included). Used to
+/// test the traveller's *whole path this frame* against a reveal radius, not
+/// just where it ended up — at a tight [`SecretLocation`] radius a single fast
+/// frame could otherwise step clean over the spot.
+pub fn point_segment_distance(a: Vec2, b: Vec2, p: Vec2) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq <= f32::EPSILON {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
+}
+
+/// Reveals a hidden location when a traveller's path this frame passes within
+/// its reveal radius — [`WorldMapConfig::reveal_radius_tiles`] for an ordinary
+/// place, the far tighter [`WorldMapConfig::secret_reveal_radius_tiles`] for a
+/// [`SecretLocation`]. Either radius being `None` disables that kind only.
 pub fn reveal_locations(
-    travelers: Query<(&Traveler, &TilePos)>,
+    travelers: Query<(&Traveler, &TilePos, &TravelProgress)>,
     maps: Query<&WorldMapConfig>,
-    mut locations: Query<(Entity, &Location, &ChildOf, &mut Discovered)>,
+    mut locations: Query<(
+        Entity,
+        &Location,
+        &ChildOf,
+        &mut Discovered,
+        Has<SecretLocation>,
+    )>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
-    for (location_e, location, child_of, mut discovered) in &mut locations {
+    for (location_e, location, child_of, mut discovered, secret) in &mut locations {
         if discovered.0 {
             continue;
         }
@@ -330,13 +375,17 @@ pub fn reveal_locations(
         let Ok(config) = maps.get(map) else {
             continue;
         };
-        let Some(radius) = config.reveal_radius_tiles else {
+        let radius = if secret {
+            config.secret_reveal_radius_tiles
+        } else {
+            config.reveal_radius_tiles
+        };
+        let Some(radius) = radius else {
             continue;
         };
-        let center = location.cell.as_vec2() + Vec2::splat(0.5);
-        let near = travelers
-            .iter()
-            .any(|(t, pos)| t.map == map && pos.0.distance(center) <= radius);
+        let near = travelers.iter().any(|(t, pos, progress)| {
+            t.map == map && point_segment_distance(progress.from, pos.0, location.pos) <= radius
+        });
         if near {
             discovered.0 = true;
             actions.write(WorldMapAction::LocationDiscovered {
@@ -348,20 +397,27 @@ pub fn reveal_locations(
 }
 
 /// Maintains each traveller's [`AtLocation`], firing `LocationReached` /
-/// `LocationLeft` on the edges.
+/// `LocationLeft` on the edges. Only *discovered* locations count — an
+/// undiscovered secret sharing your cell is not somewhere you've "reached" —
+/// and when several share a cell the nearest to the traveller wins.
 pub fn track_location(
     mut travelers: Query<(Entity, &Traveler, &TilePos, &mut AtLocation)>,
-    locations: Query<(Entity, &Location, &ChildOf)>,
+    locations: Query<(Entity, &Location, &ChildOf, &Discovered)>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
     for (traveler_e, traveler, pos, mut at) in &mut travelers {
         let cell = cell_of(pos.0);
         let now = locations
             .iter()
-            .find_map(|(location_e, location, child_of)| {
-                (child_of.parent() == traveler.map && location.cell.as_ivec2() == cell)
-                    .then_some(location_e)
-            });
+            .filter(|(_, location, child_of, discovered)| {
+                discovered.0 && child_of.parent() == traveler.map && location.cell() == cell
+            })
+            .min_by(|(_, a, _, _), (_, b, _, _)| {
+                a.pos
+                    .distance_squared(pos.0)
+                    .total_cmp(&b.pos.distance_squared(pos.0))
+            })
+            .map(|(location_e, _, _, _)| location_e);
         if now == at.0 {
             continue;
         }
@@ -395,5 +451,21 @@ mod tests {
         // Cell (0,0) centre in tile space is (0.5, 0.5).
         let w = traveler_world(&grid, Vec2::splat(0.5));
         assert_eq!(w, Vec2::new(-144.0 + 24.0, 144.0 - 24.0));
+    }
+
+    #[test]
+    fn point_segment_distance_projects_onto_the_segment() {
+        let a = Vec2::new(0.0, 0.0);
+        let b = Vec2::new(10.0, 0.0);
+        // Foot of perpendicular lands inside the segment.
+        assert!((point_segment_distance(a, b, Vec2::new(4.0, 3.0)) - 3.0).abs() < 1.0e-5);
+        // A fast frame steps a → b clean over a point 0.2 off the line.
+        assert!(point_segment_distance(a, b, Vec2::new(5.0, 0.2)) <= 0.2 + 1.0e-5);
+        // Projection past b -> distance to b itself.
+        assert!((point_segment_distance(a, b, Vec2::new(13.0, 4.0)) - 5.0).abs() < 1.0e-5);
+        // Projection before a -> distance to a itself.
+        assert!((point_segment_distance(a, b, Vec2::new(-3.0, 4.0)) - 5.0).abs() < 1.0e-5);
+        // Degenerate segment -> plain point distance.
+        assert!((point_segment_distance(a, a, Vec2::new(3.0, 4.0)) - 5.0).abs() < 1.0e-5);
     }
 }

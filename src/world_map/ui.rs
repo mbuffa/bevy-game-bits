@@ -18,8 +18,8 @@ use crate::world_map::config::{
 use crate::world_map::data::{tile_to_world, WorldMapData, WorldMapGrid};
 use crate::world_map::time::WorldMapClock;
 use crate::world_map::travel::{
-    traveler_world, AtLocation, Discovered, Location, TilePos, TravelProgress, TravelTarget,
-    Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor,
+    traveler_world, AtLocation, Discovered, Location, SecretLocation, TilePos, TravelProgress,
+    TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor,
 };
 
 /// Marks the root entity of one map — carries every per-map component and is
@@ -57,6 +57,10 @@ pub struct WorldMapParts {
     /// The clock chip text. Empty and hidden unless a
     /// [`WorldMapClock`](super::WorldMapClock) exists.
     pub clock_label: Entity,
+    /// The live `you … · cursor …` tile-coordinate line. Hidden when
+    /// [`WorldMapConfig::show_coords`](super::WorldMapConfig::show_coords) is
+    /// false.
+    pub coords_label: Entity,
 }
 
 /// One terrain tile quad. `ChildOf` the map.
@@ -158,6 +162,23 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
         ))
         .id();
 
+    let coords_label = commands
+        .spawn((
+            Text::new(""),
+            TextFont {
+                font_size: theme.coords_font_size,
+                ..default()
+            },
+            TextColor(theme.coords_text_color),
+            if config.show_coords {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            ChildOf(aside_root),
+        ))
+        .id();
+
     let status_text = commands
         .spawn((
             Text::new(""),
@@ -186,6 +207,7 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
                 aside_list,
                 status_text,
                 clock_label,
+                coords_label,
             },
         ))
         .id()
@@ -271,21 +293,24 @@ pub fn resolve_map(
         commands.spawn((TargetMarker(traveler), map_child(map)));
         commands.spawn((EnterWidget(traveler), map_child(map)));
 
-        // Locations.
+        // Locations. `from_data` succeeded above, so `tile_pos()` is `Some`.
         for location in &data.locations {
-            let cell = UVec2::from(location.cell);
-            let center = tile_to_world(cell.as_vec2() + Vec2::splat(0.5), size_px, tile_px);
+            let pos = location
+                .tile_pos()
+                .expect("validated by WorldMapGrid::from_data");
+            let discovered = location.discovered();
+            let center = tile_to_world(pos, size_px, tile_px);
             let location_entity = commands
                 .spawn((
                     Location {
                         id: location.id.clone(),
                         name: location.name.clone(),
-                        cell,
+                        pos,
                         description: location.description.clone(),
                     },
-                    Discovered(location.discovered),
+                    Discovered(discovered),
                     Transform::from_translation(center.extend(0.0)),
-                    if location.discovered {
+                    if discovered {
                         Visibility::Inherited
                     } else {
                         Visibility::Hidden
@@ -293,6 +318,9 @@ pub fn resolve_map(
                     ChildOf(map),
                 ))
                 .id();
+            if location.secret {
+                commands.entity(location_entity).insert(SecretLocation);
+            }
 
             commands.spawn((
                 AsideRow {
@@ -351,7 +379,7 @@ pub fn build_map_visuals(
     tokens: Query<(Entity, &Traveler)>,
     markers: Query<(Entity, &TargetMarker)>,
     widgets: Query<(Entity, &EnterWidget)>,
-    locations: Query<(Entity, &Location, &ChildOf)>,
+    locations: Query<(Entity, &Location, &ChildOf, Has<SecretLocation>)>,
     rows: Query<(Entity, &AsideRow)>,
     row_texts: Query<(Entity, &ChildOf), With<AsideRowText>>,
     mut text_fonts: Query<&mut TextFont>,
@@ -444,19 +472,29 @@ pub fn build_map_visuals(
                 .insert((Mesh2d(tri.clone()), MeshMaterial2d(tri_mat.clone())));
         }
 
-        // Location circles + name labels.
+        // Location circles + name labels. Secrets get their own smaller dot.
         let loc_mesh = meshes.add(Circle::new(theme.location_radius_px));
         let loc_mat = materials.add(ColorMaterial::from(theme.location_color));
-        for (entity, location, child_of) in &locations {
+        let secret_mesh = meshes.add(Circle::new(theme.secret_location_radius_px));
+        let secret_mat = materials.add(ColorMaterial::from(theme.secret_location_color));
+        for (entity, location, child_of, secret) in &locations {
             if child_of.parent() != map {
                 continue;
             }
+            let (mesh, mat, radius) = if secret {
+                (
+                    secret_mesh.clone(),
+                    secret_mat.clone(),
+                    theme.secret_location_radius_px,
+                )
+            } else {
+                (loc_mesh.clone(), loc_mat.clone(), theme.location_radius_px)
+            };
             commands
                 .entity(entity)
-                .insert((Mesh2d(loc_mesh.clone()), MeshMaterial2d(loc_mat.clone())));
-            let label_y = theme.location_radius_px
-                + theme.location_label_gap_px
-                + theme.location_label_font_size * 0.5;
+                .insert((Mesh2d(mesh), MeshMaterial2d(mat)));
+            let label_y =
+                radius + theme.location_label_gap_px + theme.location_label_font_size * 0.5;
             commands.spawn((
                 Text2d::new(location.name.clone()),
                 TextFont {
@@ -632,10 +670,49 @@ pub fn sync_clock_label(
     }
 }
 
+/// Builds the `you … · cursor …` coordinate line — see [`coords_label`].
+fn coords_label(you: Vec2, cursor: Option<Vec2>) -> String {
+    match cursor {
+        Some(c) => format!(
+            "you {:.2}, {:.2}  ·  cursor {:.2}, {:.2}",
+            you.x, you.y, c.x, c.y
+        ),
+        None => format!("you {:.2}, {:.2}", you.x, you.y),
+    }
+}
+
+/// Keeps the aside's tile-coordinate line current — the traveller's tile
+/// position and the cursor's (dropped while the pointer is off the map). Skips
+/// a map whose [`WorldMapConfig::show_coords`](super::WorldMapConfig) is false,
+/// leaving that line hidden.
+pub fn sync_coords_label(
+    maps: Query<(Entity, &WorldMapConfig, &WorldMapCursor, &WorldMapParts)>,
+    travelers: Query<(&Traveler, &TilePos)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (map, config, cursor, parts) in &maps {
+        if !config.show_coords {
+            continue;
+        }
+        let Ok(mut text) = texts.get_mut(parts.coords_label) else {
+            continue;
+        };
+        let you = travelers
+            .iter()
+            .find_map(|(t, pos)| (t.map == map).then_some(pos.0))
+            .unwrap_or(Vec2::ZERO);
+        let label = coords_label(you, cursor.valid.then_some(cursor.tile));
+        if text.0 != label {
+            text.0 = label;
+        }
+    }
+}
+
 /// Writes the one-line status text from the latest [`WorldMapAction`].
 pub fn sync_status_text(
     mut actions: MessageReader<WorldMapAction>,
     locations: Query<&Location>,
+    secrets: Query<(), With<SecretLocation>>,
     maps: Query<&WorldMapParts>,
     mut texts: Query<&mut Text>,
 ) {
@@ -658,6 +735,7 @@ pub fn sync_status_text(
             WorldMapAction::LocationDiscovered { map, location } => (
                 *map,
                 match locations.get(*location) {
+                    Ok(l) if secrets.contains(*location) => format!("Found {}.", l.name),
                     Ok(l) => format!("Discovered {}.", l.name),
                     Err(_) => "Discovered a location.".to_string(),
                 },
@@ -747,7 +825,7 @@ pub fn travel_to_aside_row(
         let Ok(grid) = maps.get(row.map) else {
             continue;
         };
-        let tile = grid.clamp_tile_pos(location.cell.as_vec2() + Vec2::splat(0.5));
+        let tile = grid.clamp_tile_pos(location.pos);
         for (traveler_e, traveler, mut target) in &mut travelers {
             if traveler.map != row.map {
                 continue;
@@ -801,4 +879,18 @@ pub fn follow_and_clamp_camera(
     center = clamp_camera_center(grid.size_px(), visible, center);
     camera.translation.x = center.x;
     camera.translation.y = center.y;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coords_label_formats_and_drops_an_invalid_cursor() {
+        assert_eq!(
+            coords_label(Vec2::new(1.5, 8.5), Some(Vec2::new(6.352, 7.809))),
+            "you 1.50, 8.50  ·  cursor 6.35, 7.81"
+        );
+        assert_eq!(coords_label(Vec2::new(1.5, 8.5), None), "you 1.50, 8.50");
+    }
 }
