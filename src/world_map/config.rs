@@ -33,15 +33,25 @@ pub struct WorldMapConfig {
     /// closes each frame (`1.0 - follow_lerp` is the frame-rate-independent
     /// decay base). `12.0` is a firm-but-smooth follow.
     pub follow_lerp: f32,
-    /// How close (in tiles) the traveller must pass an undiscovered location
-    /// for it to be revealed. `None` disables reveal — every location shows
-    /// from the start regardless of its `discovered` flag.
+    /// How close (in tiles) the traveller's path must pass an undiscovered
+    /// **ordinary** location for it to be revealed. `None` means proximity
+    /// never reveals an ordinary location — one stays hidden until its
+    /// `discovered` flag is set some other way.
     pub reveal_radius_tiles: Option<f32>,
+    /// How close (in tiles) the traveller's path must pass an undiscovered
+    /// [`SecretLocation`](super::SecretLocation) — deliberately tiny, since a
+    /// secret is a spot you have to walk almost exactly. Independent of
+    /// [`reveal_radius_tiles`](Self::reveal_radius_tiles); `None` disables
+    /// proximity reveal for secrets only.
+    pub secret_reveal_radius_tiles: Option<f32>,
     /// Click radius, in world units, of the "enter this place" widget that
     /// appears once the traveller is standing on a location.
     pub enter_widget_radius_px: f32,
     /// Heading shown above the aside list. `None` draws no heading row.
     pub title: Option<Cow<'static, str>>,
+    /// Show the live `you … · cursor …` tile-coordinate line in the aside — the
+    /// aiming aid a sub-tile secret hunt needs. `false` hides it.
+    pub show_coords: bool,
 }
 
 impl Default for WorldMapConfig {
@@ -53,8 +63,10 @@ impl Default for WorldMapConfig {
             follow_traveler: true,
             follow_lerp: 12.0,
             reveal_radius_tiles: Some(1.6),
+            secret_reveal_radius_tiles: Some(0.15),
             enter_widget_radius_px: 22.0,
             title: Some(Cow::Borrowed("WORLD MAP")),
+            show_coords: true,
         }
     }
 }
@@ -72,6 +84,10 @@ pub struct WorldMapTheme {
     pub tile_inset_px: f32,
     pub location_radius_px: f32,
     pub location_color: Color,
+    /// Dot for a discovered [`SecretLocation`](super::SecretLocation) — smaller
+    /// and cooler, so a found secret reads apart from a town.
+    pub secret_location_radius_px: f32,
+    pub secret_location_color: Color,
     pub location_label_color: Color,
     pub location_label_font_size: f32,
     /// Gap between the top of a location's circle and its name label.
@@ -103,6 +119,8 @@ pub struct WorldMapTheme {
     pub status_font_size: f32,
     pub clock_text_color: Color,
     pub clock_font_size: f32,
+    pub coords_text_color: Color,
+    pub coords_font_size: f32,
 }
 
 impl Default for WorldMapTheme {
@@ -112,6 +130,8 @@ impl Default for WorldMapTheme {
             tile_inset_px: 1.0,
             location_radius_px: 9.0,
             location_color: Color::srgb(0.9, 0.82, 0.4),
+            secret_location_radius_px: 6.0,
+            secret_location_color: Color::srgb(0.55, 0.8, 0.85),
             location_label_color: Color::srgb(0.95, 0.93, 0.86),
             location_label_font_size: 13.0,
             location_label_gap_px: 4.0,
@@ -140,6 +160,8 @@ impl Default for WorldMapTheme {
             status_font_size: 13.0,
             clock_text_color: Color::srgb(0.9, 0.88, 0.82),
             clock_font_size: 15.0,
+            coords_text_color: Color::srgb(0.55, 0.6, 0.66),
+            coords_font_size: 12.0,
         }
     }
 }

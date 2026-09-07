@@ -26,10 +26,6 @@ fn default_tile_px() -> f32 {
     48.0
 }
 
-fn discovered_default() -> bool {
-    true
-}
-
 /// The on-disk map format — what a `*.worldmap.json` file deserializes into,
 /// and what [`WorldMapSource::Inline`](super::WorldMapSource::Inline) carries
 /// for a procedurally built map.
@@ -76,29 +72,66 @@ pub struct TerrainData {
     pub color: String,
 }
 
-/// A named place — a city, a settlement, a vault.
+/// A named place — a city, a settlement, a vault, or a [`secret`](Self::secret)
+/// cache. Its position is given **either** as [`cell`](Self::cell) (a tile, snapped
+/// to that tile's centre) **or** as [`at`](Self::at) (a tile-space float point) —
+/// exactly one, never both.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LocationData {
     /// Stable identifier, handy for a host keying save data off it.
     pub id: String,
     /// Shown on the map and in the aside.
     pub name: String,
-    /// Which tile it sits on, `[col, row]`.
-    pub cell: [u32; 2],
+    /// Which tile it sits on, `[col, row]` — resolves to that tile's centre.
+    /// Mutually exclusive with [`at`](Self::at).
+    #[serde(default)]
+    pub cell: Option<[u32; 2]>,
+    /// A tile-space float point `[x, y]` for a place that isn't tile-aligned —
+    /// a [`secret`](Self::secret) whose whole point is that you have to walk
+    /// the *exact* spot. Mutually exclusive with [`cell`](Self::cell).
+    #[serde(default)]
+    pub at: Option<[f32; 2]>,
     /// Flavour text for the aside. Optional.
     #[serde(default)]
     pub description: Option<String>,
+    /// A secret location stays hidden until the traveller walks almost exactly
+    /// over it — [`WorldMapConfig::secret_reveal_radius_tiles`](super::WorldMapConfig::secret_reveal_radius_tiles),
+    /// not the wide [`reveal_radius_tiles`](super::WorldMapConfig::reveal_radius_tiles)
+    /// an ordinary place is spotted from. It also flips the
+    /// [`discovered`](Self::discovered) default to `false`.
+    #[serde(default)]
+    pub secret: bool,
     /// Whether it's known from the start. An undiscovered location is hidden
-    /// from the map and the aside until the traveller passes close — see
-    /// [`WorldMapConfig::reveal_radius_tiles`](super::WorldMapConfig::reveal_radius_tiles).
-    /// Defaults to `true`.
-    #[serde(default = "discovered_default")]
-    pub discovered: bool,
+    /// from the map and the aside until the traveller passes close. Defaults to
+    /// `false` for a [`secret`](Self::secret), `true` otherwise.
+    #[serde(default)]
+    pub discovered: Option<bool>,
+}
+
+impl LocationData {
+    /// The location's position in tile space: [`at`](Self::at) if set, else the
+    /// centre of [`cell`](Self::cell). `None` if neither is set — a state
+    /// [`WorldMapGrid::from_data`] rejects.
+    pub fn tile_pos(&self) -> Option<Vec2> {
+        match (self.at, self.cell) {
+            (Some([x, y]), _) => Some(Vec2::new(x, y)),
+            (None, Some([c, r])) => Some(Vec2::new(c as f32 + 0.5, r as f32 + 0.5)),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether the location is known from the start — the [`discovered`](Self::discovered)
+    /// flag if the file set it, otherwise `false` for a secret and `true` for
+    /// anything else.
+    pub fn discovered(&self) -> bool {
+        self.discovered.unwrap_or(!self.secret)
+    }
 }
 
 impl WorldMapData {
     /// A small hand-built map — a 6×6 grid with a lake of slow water in the
-    /// middle and two towns. Handy as a test fixture and as an
+    /// middle, two towns (one hidden), and a secret cache off a float point.
+    /// Handy as a test fixture and as an
     /// [`Inline`](super::WorldMapSource::Inline) starting point before you have
     /// a real file.
     pub fn demo() -> Self {
@@ -143,18 +176,31 @@ impl WorldMapData {
                 LocationData {
                     id: "haven".to_string(),
                     name: "Haven".to_string(),
-                    cell: [1, 1],
+                    cell: Some([1, 1]),
+                    at: None,
                     description: Some("A walled town on the north road.".to_string()),
-                    discovered: true,
+                    secret: false,
+                    discovered: Some(true),
                 },
                 LocationData {
                     id: "ford".to_string(),
                     name: "The Ford".to_string(),
-                    cell: [4, 4],
+                    cell: Some([4, 4]),
+                    at: None,
                     description: Some(
                         "A river crossing, and the market that grew around it.".to_string(),
                     ),
-                    discovered: false,
+                    secret: false,
+                    discovered: Some(false),
+                },
+                LocationData {
+                    id: "cache".to_string(),
+                    name: "Buried Cache".to_string(),
+                    cell: None,
+                    at: Some([5.25, 0.25]),
+                    description: Some("Someone meant to come back for this.".to_string()),
+                    secret: true,
+                    discovered: None,
                 },
             ],
             start: [0.5, 5.5],
@@ -207,8 +253,13 @@ pub enum WorldMapError {
         expected: u32,
         found: usize,
     },
-    /// A location's `cell` was outside the `cols` × `rows` grid.
+    /// A location's position was outside the `cols` × `rows` grid. `cell` is
+    /// the tile the position fell in.
     LocationOutOfBounds { id: String, cell: [u32; 2] },
+    /// A location gave neither `cell` nor `at`.
+    LocationHasNoPosition { id: String },
+    /// A location gave both `cell` and `at`.
+    LocationHasTwoPositions { id: String },
 }
 
 impl std::fmt::Display for WorldMapError {
@@ -229,6 +280,12 @@ impl std::fmt::Display for WorldMapError {
             } => write!(f, "tile row {row} has {found} columns, expected {expected}"),
             Self::LocationOutOfBounds { id, cell } => {
                 write!(f, "location {id:?} sits off the map at {cell:?}")
+            }
+            Self::LocationHasNoPosition { id } => {
+                write!(f, "location {id:?} gives neither `cell` nor `at`")
+            }
+            Self::LocationHasTwoPositions { id } => {
+                write!(f, "location {id:?} gives both `cell` and `at`")
             }
         }
     }
@@ -289,11 +346,22 @@ impl WorldMapGrid {
         }
 
         for location in &data.locations {
-            let [c, r] = location.cell;
-            if c >= data.cols || r >= data.rows {
+            if location.cell.is_some() && location.at.is_some() {
+                return Err(WorldMapError::LocationHasTwoPositions {
+                    id: location.id.clone(),
+                });
+            }
+            let Some(pos) = location.tile_pos() else {
+                return Err(WorldMapError::LocationHasNoPosition {
+                    id: location.id.clone(),
+                });
+            };
+            let cell = cell_of(pos);
+            if !(0..data.cols as i32).contains(&cell.x) || !(0..data.rows as i32).contains(&cell.y)
+            {
                 return Err(WorldMapError::LocationOutOfBounds {
                     id: location.id.clone(),
-                    cell: location.cell,
+                    cell: [cell.x.max(0) as u32, cell.y.max(0) as u32],
                 });
             }
         }
@@ -516,7 +584,7 @@ mod tests {
     #[test]
     fn from_data_rejects_an_off_map_location() {
         let mut data = WorldMapData::demo();
-        data.locations[0].cell = [9, 0];
+        data.locations[0].cell = Some([9, 0]);
         assert_eq!(
             WorldMapGrid::from_data(&data),
             Err(WorldMapError::LocationOutOfBounds {
@@ -524,6 +592,56 @@ mod tests {
                 cell: [9, 0],
             })
         );
+    }
+
+    #[test]
+    fn from_data_rejects_an_off_map_float_point() {
+        let mut data = WorldMapData::demo();
+        data.locations[2].at = Some([8.5, 0.2]); // "cache" is the float one
+        assert_eq!(
+            WorldMapGrid::from_data(&data),
+            Err(WorldMapError::LocationOutOfBounds {
+                id: "cache".to_string(),
+                cell: [8, 0],
+            })
+        );
+    }
+
+    #[test]
+    fn from_data_rejects_a_location_with_no_position() {
+        let mut data = WorldMapData::demo();
+        data.locations[0].cell = None;
+        assert_eq!(
+            WorldMapGrid::from_data(&data),
+            Err(WorldMapError::LocationHasNoPosition {
+                id: "haven".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn from_data_rejects_a_location_with_two_positions() {
+        let mut data = WorldMapData::demo();
+        data.locations[0].at = Some([1.5, 1.5]);
+        assert_eq!(
+            WorldMapGrid::from_data(&data),
+            Err(WorldMapError::LocationHasTwoPositions {
+                id: "haven".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn location_data_resolves_position_and_discovered_default() {
+        let data = WorldMapData::demo();
+        // "cache" is a secret given as a float point.
+        let cache = &data.locations[2];
+        assert_eq!(cache.tile_pos(), Some(Vec2::new(5.25, 0.25)));
+        assert!(!cache.discovered(), "a secret defaults to undiscovered");
+        // "haven" is a plain town given as a cell -> resolves to the centre.
+        let haven = &data.locations[0];
+        assert_eq!(haven.tile_pos(), Some(Vec2::new(1.5, 1.5)));
+        assert!(haven.discovered());
     }
 
     #[test]

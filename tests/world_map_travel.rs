@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use bevy::time::TimePlugin;
 
 use bevy_game_bits::world_map::prelude::*;
-use bevy_game_bits::world_map::{tile_to_world, AsideRow, TravelProgress};
+use bevy_game_bits::world_map::{tile_to_world, AsideRow, SecretLocation, TravelProgress};
 
 /// `TimePlugin` is disabled so the generic `Time` resource is ours to drive:
 /// its `time_system` would otherwise clobber a manual `advance_by` back to a
@@ -359,6 +359,98 @@ fn clicking_an_aside_row_sends_the_traveller_there() {
     let before = tile_pos(&mut app, traveler).distance(haven);
     advance(&mut app, 0.5);
     assert!(tile_pos(&mut app, traveler).distance(haven) < before);
+}
+
+/// The demo's `cache` — a secret given as the float point `(5.25, 0.25)`.
+fn secret_of(app: &mut App) -> Entity {
+    app.world_mut()
+        .run_system_once(|q: Query<(Entity, &Location, Has<SecretLocation>)>| {
+            q.iter()
+                .find_map(|(e, l, secret)| (l.id == "cache" && secret).then_some(e))
+                .expect("the demo's secret cache, marked SecretLocation")
+        })
+        .unwrap()
+}
+
+fn discoveries_of(actions: &[WorldMapAction], location: Entity) -> usize {
+    actions
+        .iter()
+        .filter(|a| matches!(a, WorldMapAction::LocationDiscovered { location: l, .. } if *l == location))
+        .count()
+}
+
+#[test]
+fn walking_near_a_secret_does_not_reveal_it() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let traveler = traveler_of(&mut app, map);
+    let cache = secret_of(&mut app);
+
+    // 0.4 tiles away — well inside the 1.6-tile ordinary reveal radius, far
+    // outside the 0.15-tile secret one.
+    set_tile_pos(&mut app, traveler, Vec2::new(5.25, 0.65));
+    drain_actions(&mut app);
+    for _ in 0..3 {
+        app.update();
+    }
+
+    assert_eq!(discoveries_of(&drain_actions(&mut app), cache), 0);
+    assert!(!app.world().get::<Discovered>(cache).unwrap().0);
+}
+
+#[test]
+fn crossing_a_secret_reveals_it_once() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let traveler = traveler_of(&mut app, map);
+    let cache = secret_of(&mut app);
+
+    // A straight line along y = 0.25 from x = 4 to x = 7, passing exactly
+    // through the cache at (5.25, 0.25).
+    set_tile_pos(&mut app, traveler, Vec2::new(4.0, 0.25));
+    app.world_mut().get_mut::<TravelTarget>(traveler).unwrap().0 = Some(Vec2::new(7.0, 0.25));
+    drain_actions(&mut app);
+
+    // One deliberately long frame: the traveller steps from x≈4 to x≈6.4, so
+    // the *end point* is 1.15 tiles from the cache — only the swept segment
+    // catches it.
+    advance(&mut app, 2.0);
+    let after_jump = tile_pos(&mut app, traveler);
+    assert!(
+        after_jump.distance(Vec2::new(5.25, 0.25)) > 0.15,
+        "the frame must overshoot the cache, landed at {after_jump}"
+    );
+    let mut total = discoveries_of(&drain_actions(&mut app), cache);
+
+    for _ in 0..10 {
+        advance(&mut app, 0.1);
+        total += discoveries_of(&drain_actions(&mut app), cache);
+    }
+    assert_eq!(total, 1);
+    assert!(app.world().get::<Discovered>(cache).unwrap().0);
+}
+
+#[test]
+fn an_undiscovered_location_is_never_reached() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let traveler = traveler_of(&mut app, map);
+    let cache = secret_of(&mut app);
+
+    // Standing in the cache's own cell (5,0) but ~0.5 tiles from its point —
+    // inside the cell, outside the reveal radius.
+    set_tile_pos(&mut app, traveler, Vec2::new(5.6, 0.6));
+    drain_actions(&mut app);
+    app.update();
+
+    assert!(!app.world().get::<Discovered>(cache).unwrap().0);
+    assert_eq!(app.world().get::<AtLocation>(traveler).unwrap().0, None);
+    assert!(
+        !drain_actions(&mut app)
+            .iter()
+            .any(|a| matches!(a, WorldMapAction::LocationReached { .. })),
+        "an unseen location is not somewhere you've reached"
+    );
 }
 
 #[test]

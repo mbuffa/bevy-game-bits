@@ -746,7 +746,12 @@ pub fn end_drag(
                     drop.origin,
                     to,
                     (source, &mut source_grid, &mut source_sel),
-                    (drop.target, &mut target_grid, &mut target_sel, target_config),
+                    (
+                        drop.target,
+                        &mut target_grid,
+                        &mut target_sel,
+                        target_config,
+                    ),
                     &mut slot,
                     &mut node,
                     &mut actions,
