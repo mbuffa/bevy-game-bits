@@ -25,6 +25,10 @@ log = { version = "*", features = [
 # derby car's GLB from its procedural meshes/materials.
 gltf-json = { version = "1.4", features = ["names", "KHR_materials_emissive_strength"] }
 serde_json = "1"
+# `derive` for `src/world_map/`'s JSON map format (`examples/009-world-map`).
+# `serde_json` was already here for 009-derby's exporter; this promotes the
+# `serde` core crate (already in the lock transitively) to a direct dep.
+serde = { version = "1", features = ["derive"] }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

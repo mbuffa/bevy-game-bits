@@ -424,6 +424,7 @@ dependencies = [
  "bevy_hanabi",
  "gltf-json",
  "log",
+ "serde",
  "serde_json",
 ]
 

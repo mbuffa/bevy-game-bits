@@ -7,3 +7,4 @@
 pub mod inventory;
 pub mod jump;
 pub mod vehicle;
+pub mod world_map;
