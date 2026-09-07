@@ -27,7 +27,9 @@ pub struct WorldMapConfig {
     /// Arrow-key pan speed, in world units per second.
     pub pan_px_per_sec: f32,
     /// Whether the camera eases to keep the traveller in view while it's
-    /// moving. A manual pan suspends it until the next target is set.
+    /// moving. A manual pan suspends it until the next target is set. Does
+    /// **not** gate the initial framing — a map always opens centred on its
+    /// player traveller ([`snap_camera_to_traveler`](super::snap_camera_to_traveler)).
     pub follow_traveler: bool,
     /// Per-second fraction of the remaining distance the following camera
     /// closes each frame (`1.0 - follow_lerp` is the frame-rate-independent
@@ -337,6 +339,35 @@ mod tests {
         // visible region's right edge (camera + 300).
         let clamped = clamp_camera_center(map, visible, Vec2::new(9999.0, 0.0));
         assert_eq!(clamped.x + visible.max.x, 2000.0);
+    }
+
+    #[test]
+    fn clamp_frames_a_corner_start_on_a_huge_map() {
+        // 128 × 128 @ 48 px — the example map. The traveller starts on Shady
+        // Sands' cell (1.5, 8.5) in the top-left corner.
+        let win = Vec2::new(1600.0, 900.0);
+        let visible = visible_rect(win, &layout(AsideSide::Right));
+        let map = Vec2::new(6144.0, 6144.0);
+
+        // tile (1.5, 8.5) -> world: x = 1.5·48 - 3072 = -3000,
+        //                           y = 3072 - 8.5·48 = 2664.
+        let wanted = Vec2::new(-3000.0, 2664.0);
+        let c = clamp_camera_center(map, visible, wanted);
+
+        // Both axes clamp: the map's left and top edges sit flush with the
+        // visible region rather than pulling in past it.
+        assert_eq!(c.x + visible.min.x, -3072.0);
+        assert_eq!(c.y + visible.max.y, 3072.0);
+
+        // The property that matters: the traveller is still on screen.
+        let seen = Rect {
+            min: c + visible.min,
+            max: c + visible.max,
+        };
+        assert!(
+            seen.contains(wanted),
+            "traveller at {wanted} outside visible {seen:?}"
+        );
     }
 
     #[test]

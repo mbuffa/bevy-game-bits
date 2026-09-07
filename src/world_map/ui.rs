@@ -46,6 +46,10 @@ pub struct WorldMapLoadFailed;
 #[derive(Component)]
 pub struct WorldMapVisualsBuilt;
 
+/// Set once [`snap_camera_to_traveler`] has framed a map, so it frames it once.
+#[derive(Component)]
+pub struct CameraSnapped;
+
 /// The satellite entities [`spawn_world_map`] built for one map. A `Component`
 /// on the map entity.
 #[derive(Component, Clone, Copy, Debug)]
@@ -1132,6 +1136,40 @@ pub fn pick_interact_menu_row(
         if let Ok(mut menu) = menus.get_mut(row.map) {
             menu.close();
         }
+    }
+}
+
+/// Frames the map on the player traveller the first frame its
+/// [`WorldMapGrid`] exists, then inserts [`CameraSnapped`] so it never runs
+/// for that map again. Without this, a map larger than the viewport opens on
+/// its centre (via [`follow_and_clamp_camera`]'s clamp) regardless of where the
+/// player actually stands — fine for the old 480×480 map, a screenful of empty
+/// plains on a 6144×6144 one.
+///
+/// It is deliberately **not** gated on
+/// [`WorldMapConfig::follow_traveler`](super::WorldMapConfig::follow_traveler):
+/// that flag decides whether the camera *chases* the token, not where the map
+/// *opens*, and a host that turned following off still shouldn't open on
+/// nothing. A missing [`Window`] or [`WorldMapCamera`] just makes a `Single`
+/// fail, so the system skips and retries next frame rather than marking the map
+/// snapped. The [`Without<CameraSnapped>`] query resolves `&WorldMapGrid`, so it
+/// first fires the frame [`resolve_map`] inserts the grid.
+pub fn snap_camera_to_traveler(
+    mut commands: Commands,
+    window: Single<&Window>,
+    mut camera: Single<&mut Transform, With<WorldMapCamera>>,
+    maps: Query<(Entity, &WorldMapGrid, &WorldMapLayout), Without<CameraSnapped>>,
+    travelers: Query<(&Traveler, &TilePos), With<PlayerTraveler>>,
+) {
+    for (map, grid, layout) in &maps {
+        let Some((_, pos)) = travelers.iter().find(|(t, _)| t.map == map) else {
+            continue;
+        };
+        let visible = visible_rect(window.size(), layout);
+        let center = clamp_camera_center(grid.size_px(), visible, traveler_world(grid, pos.0));
+        camera.translation.x = center.x;
+        camera.translation.y = center.y;
+        commands.entity(map).insert(CameraSnapped);
     }
 }
 

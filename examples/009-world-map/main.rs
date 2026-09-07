@@ -5,7 +5,15 @@
 //! a straight line and slows to a crawl through forest, swamp and mountains,
 //! so the fast route is the one *you* pick around them. `Space` cancels the
 //! current trip. The arrow keys pan the map; while you're travelling the
-//! camera follows the token until you pan away. Walk onto a town and a green
+//! camera follows the token until you pan away.
+//!
+//! The map is 128×128 tiles — far larger than the window — so it opens framed
+//! on your token, the arrow keys are how you look around, and the view clamps at
+//! each edge (and stops short of the sidebar). The settled country is the
+//! 10×10 block in the top-left corner; everything past it is open plains. At the
+//! base travel speed a straight run across the whole map is roughly a hundred
+//! seconds of walking, so on a map this size panning is how you look and setting
+//! off is a commitment. Walk onto a town and a green
 //! square appears over the token — click it to "enter" (this example just
 //! logs it). When more than one thing is in reach — a town *and* a caravan
 //! standing on it — that one square pops a small menu to pick from; `Escape`

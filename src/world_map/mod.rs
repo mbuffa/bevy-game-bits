@@ -102,7 +102,9 @@
 //! single fast frame could skim the corner of a slow tile. The interact square
 //! sits just above the token, so a click on the very next tile up, close to the
 //! token, can read as "interact" rather than "travel". The camera systems
-//! assume one map is on screen at a time.
+//! assume one map is on screen at a time. A map opens framed on its
+//! [`PlayerTraveler`] ([`snap_camera_to_traveler`]), then follows or holds per
+//! [`WorldMapConfig::follow_traveler`].
 
 pub mod asset;
 pub mod config;
@@ -133,11 +135,12 @@ pub use travel::{
 };
 pub use ui::{
     build_map_visuals, build_party_visuals, follow_and_clamp_camera, pan_camera,
-    pick_interact_menu_row, refollow_on_new_target, resolve_map, spawn_world_map, sync_aside,
-    sync_clock_label, sync_coords_label, sync_interact_menu, sync_interact_widgets,
-    sync_location_visibility, sync_party_visibility, sync_status_text, sync_target_marker,
-    sync_traveler_transform, travel_to_aside_row, AsideRow, InteractMenuRow, InteractWidget,
-    TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile, WorldMapView,
+    pick_interact_menu_row, refollow_on_new_target, resolve_map, snap_camera_to_traveler,
+    spawn_world_map, sync_aside, sync_clock_label, sync_coords_label, sync_interact_menu,
+    sync_interact_widgets, sync_location_visibility, sync_party_visibility, sync_status_text,
+    sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow, CameraSnapped,
+    InteractMenuRow, InteractWidget, TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile,
+    WorldMapView,
 };
 
 /// Everything you need to build and drive a world map, in one import.
@@ -282,7 +285,12 @@ impl Plugin for WorldMapPlugin {
                     ui::sync_clock_label,
                     ui::sync_coords_label,
                     ui::sync_status_text,
-                    (ui::sync_traveler_transform, ui::follow_and_clamp_camera).chain(),
+                    (
+                        ui::sync_traveler_transform,
+                        ui::snap_camera_to_traveler,
+                        ui::follow_and_clamp_camera,
+                    )
+                        .chain(),
                 )
                     .in_set(WorldMapSet::Sync),
             );
