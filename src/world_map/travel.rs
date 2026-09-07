@@ -72,11 +72,19 @@ impl Default for Spotted {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct TravelSpeed(pub f32);
 
-/// The [`Party`] the player is currently in contact with, if any — the nearest
-/// one within [`WorldMapConfig::intercept_radius_tiles`]. Maintained by
-/// [`track_intercepts`]; the exact shape of [`AtLocation`].
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct Intercepting(pub Option<Entity>);
+/// Every [`Party`] the player is currently in contact with — those within
+/// [`WorldMapConfig::intercept_radius_tiles`] this frame, **nearest first**.
+/// Maintained by [`track_intercepts`]. A `Vec`, not an `Option`: two caravans
+/// can share a spot, and the interact menu needs to offer both.
+#[derive(Component, Clone, Debug, Default)]
+pub struct Intercepting(pub Vec<Entity>);
+
+impl Intercepting {
+    /// The closest party in contact, if any.
+    pub fn nearest(&self) -> Option<Entity> {
+        self.0.first().copied()
+    }
+}
 
 /// The traveller's position in **tile space** — the authoritative one. The
 /// `Transform` is kept in step with it by
@@ -140,6 +148,36 @@ pub struct WorldMapTime {
 /// rate while it's held; scale `Time<Virtual>` for a faster "rest".
 #[derive(Component, Default, Clone, Copy, Debug)]
 pub struct WorldClockHold;
+
+/// The open/closed state of the "interact" menu for one map — a `Component` on
+/// the map entity. Opened by [`handle_click`] when the interact square is
+/// clicked with **two or more** things in reach (one subject acts immediately,
+/// no menu); closed by a pick, an outside click, `Escape`, or the subjects
+/// going out of reach. A host that wants its own menu UI can read this plus
+/// [`Intercepting`] and write [`WorldMapAction::EnterRequested`] /
+/// [`WorldMapAction::InteractRequested`] itself.
+#[derive(Component, Default, Clone, Debug)]
+pub struct InteractMenu {
+    /// The traveller the menu is open for; `None` when closed.
+    pub traveler: Option<Entity>,
+    /// What the rows currently stand for — re-checked against the live subjects
+    /// each frame by [`sync_interact_menu`](super::sync_interact_menu), so a
+    /// party walking out of reach drops its row.
+    pub subjects: Vec<InteractSubject>,
+}
+
+impl InteractMenu {
+    /// Is the menu open?
+    pub fn is_open(&self) -> bool {
+        self.traveler.is_some()
+    }
+
+    /// Reset to the closed state.
+    pub fn close(&mut self) {
+        self.traveler = None;
+        self.subjects.clear();
+    }
+}
 
 /// The cursor's position over one map, refreshed every frame by
 /// [`track_cursor`]. A `Component` on the map entity.
@@ -308,28 +346,27 @@ pub enum InteractSubject {
     Party(Entity),
 }
 
-/// Where the interact-widget squares sit over the token, in world space. Slot 0
-/// is the location under the player, slot 1 the party on top of it; whichever
-/// are present are centred as a row [`WorldMapConfig::interact_widget_offset_px`]
-/// above the token, at pitch `2·half + gap`. The one place this geometry is
-/// written — [`handle_click`]'s hit test and
+/// Everything the player can interact with from where they're standing — the
+/// [`Location`] under the token first (if any), then every intercepted
+/// [`Party`] nearest-first. The one place this list is built:
+/// [`handle_click`], [`sync_interact_widgets`](super::sync_interact_widgets) and
+/// [`sync_interact_menu`](super::sync_interact_menu) all call it.
+pub fn interact_subjects(at: &AtLocation, intercepting: &Intercepting) -> Vec<InteractSubject> {
+    let mut out = Vec::with_capacity(1 + intercepting.0.len());
+    if let Some(location) = at.0 {
+        out.push(InteractSubject::Location(location));
+    }
+    out.extend(intercepting.0.iter().map(|&p| InteractSubject::Party(p)));
+    out
+}
+
+/// Where the single "interact" square sits over the token, in world space —
+/// [`WorldMapConfig::interact_widget_offset_px`] straight above it. The one
+/// place this geometry is written: [`handle_click`]'s hit test and
 /// [`sync_interact_widgets`](super::sync_interact_widgets)'s drawing both call
 /// it, so the square you click is always the square you see.
-pub fn interact_widget_layout(
-    token_world: Vec2,
-    subjects: [Option<InteractSubject>; 2],
-    config: &WorldMapConfig,
-) -> [Option<(InteractSubject, Vec2)>; 2] {
-    let present: Vec<usize> = (0..2).filter(|&i| subjects[i].is_some()).collect();
-    let n = present.len() as f32;
-    let pitch = 2.0 * config.interact_widget_half_px + config.interact_widget_gap_px;
-    let mut out: [Option<(InteractSubject, Vec2)>; 2] = [None, None];
-    for (k, &i) in present.iter().enumerate() {
-        let x = (k as f32 - (n - 1.0) / 2.0) * pitch;
-        let center = token_world + Vec2::new(x, config.interact_widget_offset_px);
-        out[i] = Some((subjects[i].unwrap(), center));
-    }
-    out
+pub fn interact_widget_center(token_world: Vec2, config: &WorldMapConfig) -> Vec2 {
+    token_world + Vec2::new(0.0, config.interact_widget_offset_px)
 }
 
 /// Is `p` inside the axis-aligned square of half-extent `half` centred on
@@ -361,15 +398,50 @@ pub fn track_cursor(
     }
 }
 
-/// A left click either interacts with something under the player (a location to
-/// enter, an intercepted [`Party`] to hail) or sets a new travel target. Clicks
-/// landing on the aside are ignored (the repo's `Query<&Interaction>` guard).
-/// Only the [`PlayerTraveler`] is steered — a caravan is the host's to drive.
+/// Fire the [`WorldMapAction`] one interact subject stands for.
+pub(crate) fn write_subject_action(
+    actions: &mut MessageWriter<WorldMapAction>,
+    map: Entity,
+    traveler: Entity,
+    subject: InteractSubject,
+) {
+    match subject {
+        InteractSubject::Location(location) => {
+            actions.write(WorldMapAction::EnterRequested {
+                map,
+                traveler,
+                location,
+            });
+        }
+        InteractSubject::Party(party) => {
+            actions.write(WorldMapAction::InteractRequested {
+                map,
+                traveler,
+                party,
+            });
+        }
+    }
+}
+
+/// A left click interacts with the interact square over the player, dismisses an
+/// open menu, or sets a new travel target. Clicks landing on the aside or the
+/// open menu are ignored (the repo's `Query<&Interaction>` guard). Only the
+/// [`PlayerTraveler`] is steered — a caravan is the host's to drive.
+///
+/// The square: with **one** thing in reach a click acts on it immediately; with
+/// two or more it opens the [`InteractMenu`] for [`sync_interact_menu`](super::sync_interact_menu)
+/// to draw and [`pick_interact_menu_row`](super::pick_interact_menu_row) to
+/// resolve. A click anywhere else while the menu is open just closes it.
 #[allow(clippy::type_complexity)]
 pub fn handle_click(
     buttons: Res<ButtonInput<MouseButton>>,
     ui_nodes: Query<&Interaction>,
-    maps: Query<(&WorldMapGrid, &WorldMapCursor, &WorldMapConfig)>,
+    mut maps: Query<(
+        &WorldMapGrid,
+        &WorldMapCursor,
+        &WorldMapConfig,
+        &mut InteractMenu,
+    )>,
     mut travelers: Query<
         (
             Entity,
@@ -391,55 +463,42 @@ pub fn handle_click(
     }
 
     for (traveler_e, traveler, pos, mut target, at, intercepting) in &mut travelers {
-        let Ok((grid, cursor, config)) = maps.get(traveler.map) else {
+        let Ok((grid, cursor, config, mut menu)) = maps.get_mut(traveler.map) else {
             continue;
         };
         if !cursor.valid {
             continue;
         }
 
-        // A click on one of the interact-widget squares means "act on that
-        // subject", not "walk one tile over": slot 0 is the location under the
-        // token, slot 1 an intercepted party. A miss falls through to travel.
         let here = traveler_world(grid, pos.0);
-        let subjects = [
-            at.0.map(InteractSubject::Location),
-            intercepting.0.map(InteractSubject::Party),
-        ];
-        let mut acted = false;
-        for (subject, center) in interact_widget_layout(here, subjects, config)
-            .into_iter()
-            .flatten()
-        {
-            if !in_interact_square(center, config.interact_widget_half_px, cursor.world) {
-                continue;
-            }
+        let center = interact_widget_center(here, config);
+        let on_square = in_interact_square(center, config.interact_widget_half_px, cursor.world);
+        let subjects = interact_subjects(at, intercepting);
+
+        if on_square && !subjects.is_empty() {
+            // Acting on the square, not walking one tile over — drop any trip.
             if target.0.take().is_some() {
                 actions.write(WorldMapAction::TargetCleared {
                     map: traveler.map,
                     traveler: traveler_e,
                 });
             }
-            match subject {
-                InteractSubject::Location(location) => {
-                    actions.write(WorldMapAction::EnterRequested {
-                        map: traveler.map,
-                        traveler: traveler_e,
-                        location,
-                    });
-                }
-                InteractSubject::Party(party) => {
-                    actions.write(WorldMapAction::InteractRequested {
-                        map: traveler.map,
-                        traveler: traveler_e,
-                        party,
-                    });
-                }
+            if menu.is_open() {
+                menu.close();
+            } else if let [only] = subjects[..] {
+                write_subject_action(&mut actions, traveler.map, traveler_e, only);
+            } else {
+                // Open it; `sync_interact_menu` fills in the rows from the live
+                // subjects, so it stays the one place that list is built.
+                menu.traveler = Some(traveler_e);
+                menu.subjects.clear();
             }
-            acted = true;
-            break;
+            continue;
         }
-        if acted {
+
+        // A click off the square closes an open menu and does nothing else.
+        if menu.is_open() {
+            menu.close();
             continue;
         }
 
@@ -453,18 +512,28 @@ pub fn handle_click(
     }
 }
 
-/// `Space` cancels the player's current target. A caravan's trip is the host's
-/// to interrupt.
+/// `Space` cancels the player's current target; `Escape` closes an open
+/// [`InteractMenu`]. A caravan's trip is the host's to interrupt.
 pub fn cancel_target(
     keys: Res<ButtonInput<KeyCode>>,
     mut travelers: Query<(Entity, &Traveler, &mut TravelTarget), With<PlayerTraveler>>,
+    mut menus: Query<&mut InteractMenu>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) {
+    let cancel = keys.just_pressed(KeyCode::Space);
+    let dismiss = keys.just_pressed(KeyCode::Escape);
+    if !cancel && !dismiss {
         return;
     }
     for (traveler_e, traveler, mut target) in &mut travelers {
-        if target.0.take().is_some() {
+        if dismiss {
+            if let Ok(mut menu) = menus.get_mut(traveler.map) {
+                if menu.is_open() {
+                    menu.close();
+                }
+            }
+        }
+        if cancel && target.0.take().is_some() {
             actions.write(WorldMapAction::TargetCleared {
                 map: traveler.map,
                 traveler: traveler_e,
@@ -679,9 +748,10 @@ pub fn track_location(
     }
 }
 
-/// Maintains the player's [`Intercepting`] — the nearest [`Party`] within
-/// [`WorldMapConfig::intercept_radius_tiles`] — firing `PartyIntercepted` /
-/// `PartyLeft` on the edges, [`track_location`]'s shape one row down.
+/// Maintains the player's [`Intercepting`] — every [`Party`] within
+/// [`WorldMapConfig::intercept_radius_tiles`], nearest first — firing a
+/// `PartyIntercepted` per party that entered contact and a `PartyLeft` per one
+/// that left, [`track_location`]'s shape one row down.
 ///
 /// The test is **swept and exact**: both tokens moved this frame, so two
 /// closing on each other could pass clean through inside one step. The gap
@@ -708,8 +778,9 @@ pub fn track_intercepts(
             .get(player_t.map)
             .ok()
             .and_then(|c| c.intercept_radius_tiles);
-        let now = radius.and_then(|radius| {
-            parties
+        let mut now: Vec<Entity> = Vec::new();
+        if let Some(radius) = radius {
+            let mut matched: Vec<(Entity, f32)> = parties
                 .iter()
                 .filter(|(_, pt, _, _)| pt.map == player_t.map)
                 .filter_map(|(party_e, _, party_pos, party_prog)| {
@@ -720,25 +791,31 @@ pub fn track_intercepts(
                     );
                     (approach <= radius).then_some((party_e, approach))
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(party_e, _)| party_e)
-        });
-        if now == intercepting.0 {
+                .collect();
+            matched.sort_by(|a, b| a.1.total_cmp(&b.1));
+            now = matched.into_iter().map(|(party_e, _)| party_e).collect();
+        }
+        // Same set (any order) — no edge, and leave the stored order alone.
+        if now.len() == intercepting.0.len() && now.iter().all(|p| intercepting.0.contains(p)) {
             continue;
         }
-        if let Some(prev) = intercepting.0 {
-            actions.write(WorldMapAction::PartyLeft {
-                map: player_t.map,
-                traveler: player_e,
-                party: prev,
-            });
+        for &prev in &intercepting.0 {
+            if !now.contains(&prev) {
+                actions.write(WorldMapAction::PartyLeft {
+                    map: player_t.map,
+                    traveler: player_e,
+                    party: prev,
+                });
+            }
         }
-        if let Some(curr) = now {
-            actions.write(WorldMapAction::PartyIntercepted {
-                map: player_t.map,
-                traveler: player_e,
-                party: curr,
-            });
+        for &curr in &now {
+            if !intercepting.0.contains(&curr) {
+                actions.write(WorldMapAction::PartyIntercepted {
+                    map: player_t.map,
+                    traveler: player_e,
+                    party: curr,
+                });
+            }
         }
         intercepting.0 = now;
     }
@@ -787,30 +864,40 @@ mod tests {
     }
 
     #[test]
-    fn interact_widget_layout_centres_one_and_spreads_two() {
+    fn interact_widget_center_sits_above_the_token() {
         let config = WorldMapConfig::default();
         let token = Vec2::new(100.0, 50.0);
-        let loc = InteractSubject::Location(Entity::PLACEHOLDER);
-        let party = InteractSubject::Party(Entity::PLACEHOLDER);
-
-        // One subject: dead centre over the token, offset up.
-        let one = interact_widget_layout(token, [Some(loc), None], &config);
-        assert!(one[1].is_none());
-        let (_, c) = one[0].unwrap();
+        let c = interact_widget_center(token, &config);
         assert!((c.x - token.x).abs() < 1.0e-5);
         assert!((c.y - (token.y + config.interact_widget_offset_px)).abs() < 1.0e-5);
+    }
 
-        // Two subjects: symmetric about the token's x, same y, slot 0 to the left.
-        let two = interact_widget_layout(token, [Some(loc), Some(party)], &config);
-        let (s0, p0) = two[0].unwrap();
-        let (s1, p1) = two[1].unwrap();
-        assert_eq!(s0, loc);
-        assert_eq!(s1, party);
-        assert!(p0.x < p1.x);
-        assert!(((p0.x - token.x) + (p1.x - token.x)).abs() < 1.0e-5);
-        assert!((p0.y - p1.y).abs() < 1.0e-5);
-        let pitch = 2.0 * config.interact_widget_half_px + config.interact_widget_gap_px;
-        assert!(((p1.x - p0.x) - pitch).abs() < 1.0e-5);
+    #[test]
+    fn interact_subjects_puts_the_location_first() {
+        let loc = Entity::from_raw_u32(1).unwrap();
+        let p0 = Entity::from_raw_u32(2).unwrap();
+        let p1 = Entity::from_raw_u32(3).unwrap();
+
+        // Nothing in reach -> empty.
+        assert!(interact_subjects(&AtLocation(None), &Intercepting(vec![])).is_empty());
+
+        // Location, then the parties in Intercepting order.
+        let subjects = interact_subjects(&AtLocation(Some(loc)), &Intercepting(vec![p0, p1]));
+        assert_eq!(
+            subjects,
+            vec![
+                InteractSubject::Location(loc),
+                InteractSubject::Party(p0),
+                InteractSubject::Party(p1),
+            ]
+        );
+
+        // Parties only, no location row.
+        let subjects = interact_subjects(&AtLocation(None), &Intercepting(vec![p1, p0]));
+        assert_eq!(
+            subjects,
+            vec![InteractSubject::Party(p1), InteractSubject::Party(p0)]
+        );
     }
 
     #[test]

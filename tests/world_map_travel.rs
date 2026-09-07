@@ -16,8 +16,8 @@ use bevy::time::TimePlugin;
 
 use bevy_game_bits::world_map::prelude::*;
 use bevy_game_bits::world_map::{
-    interact_widget_layout, tile_to_world, AsideRow, InteractSubject, SecretLocation,
-    TravelProgress,
+    interact_widget_center, tile_to_world, AsideRow, InteractMenuRow, InteractSubject,
+    SecretLocation, TravelProgress,
 };
 
 /// `TimePlugin` is disabled so the generic `Time` resource is ours to drive:
@@ -337,12 +337,7 @@ fn stepping_onto_a_location_is_reported_and_the_widget_can_be_entered() {
     };
     let config = app.world().get::<WorldMapConfig>(map).unwrap().clone();
     let token_world = tile_to_world(tile_pos(&mut app, traveler), size, tile_px);
-    let (_, widget) = interact_widget_layout(
-        token_world,
-        [Some(InteractSubject::Location(location)), None],
-        &config,
-    )[0]
-    .unwrap();
+    let widget = interact_widget_center(token_world, &config);
     set_cursor_world(&mut app, map, widget);
     click_left(&mut app);
     let actions = drain_actions(&mut app);
@@ -577,7 +572,7 @@ fn intercepting_a_party_fires_once_then_ends_on_separation() {
     assert_eq!((intercepts, leaves), (1, 0));
     assert_eq!(
         app.world().get::<Intercepting>(player).unwrap().0,
-        Some(party)
+        vec![party]
     );
 
     // Holding contact doesn't re-fire.
@@ -592,7 +587,12 @@ fn intercepting_a_party_fires_once_then_ends_on_separation() {
     assert!(drain_actions(&mut app)
         .iter()
         .any(|a| matches!(a, WorldMapAction::PartyLeft { party: p, .. } if *p == party)));
-    assert_eq!(app.world().get::<Intercepting>(player).unwrap().0, None);
+    assert!(app
+        .world()
+        .get::<Intercepting>(player)
+        .unwrap()
+        .0
+        .is_empty());
 }
 
 #[test]
@@ -726,8 +726,31 @@ fn pause_time_when_idle_false_keeps_parties_moving() {
     );
 }
 
+/// World-space centre of the interact square over `traveler`.
+fn widget_center(app: &mut App, map: Entity, traveler: Entity) -> Vec2 {
+    let (size, tile_px) = {
+        let g = app.world().get::<WorldMapGrid>(map).unwrap();
+        (g.size_px(), g.tile_px())
+    };
+    let config = app.world().get::<WorldMapConfig>(map).unwrap().clone();
+    let token_world = tile_to_world(tile_pos(app, traveler), size, tile_px);
+    interact_widget_center(token_world, &config)
+}
+
+/// The open menu's rows for `map`, as `(row entity, subject)`.
+fn menu_rows(app: &mut App, map: Entity) -> Vec<(Entity, InteractSubject)> {
+    app.world_mut()
+        .run_system_once(move |q: Query<(Entity, &InteractMenuRow)>| {
+            q.iter()
+                .filter(|(_, r)| r.map == map)
+                .map(|(e, r)| (e, r.subject))
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+}
+
 #[test]
-fn both_widgets_offer_separate_squares() {
+fn one_square_pops_a_menu_when_two_subjects_are_in_reach() {
     let mut app = new_app();
     let map = spawn_map(&mut app, WorldMapData::demo());
     let player = traveler_of(&mut app, map);
@@ -743,47 +766,108 @@ fn both_widgets_offer_separate_squares() {
         .expect("standing on Haven");
     assert_eq!(
         app.world().get::<Intercepting>(player).unwrap().0,
-        Some(party)
+        vec![party]
     );
     drain_actions(&mut app);
 
-    let (size, tile_px) = {
-        let g = app.world().get::<WorldMapGrid>(map).unwrap();
-        (g.size_px(), g.tile_px())
-    };
-    let config = app.world().get::<WorldMapConfig>(map).unwrap().clone();
-    let token_world = tile_to_world(Vec2::new(1.5, 1.5), size, tile_px);
-    let layout = interact_widget_layout(
-        token_world,
-        [
-            Some(InteractSubject::Location(haven)),
-            Some(InteractSubject::Party(party)),
-        ],
-        &config,
-    );
-    let (_, slot0) = layout[0].unwrap();
-    let (_, slot1) = layout[1].unwrap();
-
-    // Slot 0's square enters the location; no travel.
-    set_cursor_world(&mut app, map, slot0);
+    // A click on the one square with two things in reach opens the menu and
+    // acts on nothing yet.
+    let center = widget_center(&mut app, map, player);
+    set_cursor_world(&mut app, map, center);
     click_left(&mut app);
+    app.update(); // let sync_interact_menu spawn the rows
+
     let acts = drain_actions(&mut app);
-    assert!(acts.iter().any(
-        |a| matches!(a, WorldMapAction::EnterRequested { location, .. } if *location == haven)
-    ));
-    assert!(!acts
-        .iter()
-        .any(|a| matches!(a, WorldMapAction::TargetSet { .. })));
-    assert_eq!(target(&mut app, player), None);
+    assert!(!acts.iter().any(|a| matches!(
+        a,
+        WorldMapAction::EnterRequested { .. } | WorldMapAction::InteractRequested { .. }
+    )));
+    assert!(app.world().get::<InteractMenu>(map).unwrap().is_open());
 
-    // Slot 1's square hails the party; no travel.
-    set_cursor_world(&mut app, map, slot1);
-    click_left(&mut app);
+    let rows = menu_rows(&mut app, map);
+    assert_eq!(rows.len(), 2, "one row per subject");
+    let (party_row, _) = rows
+        .iter()
+        .find(|(_, s)| matches!(s, InteractSubject::Party(p) if *p == party))
+        .copied()
+        .expect("a Hail row for the party");
+    assert!(rows
+        .iter()
+        .any(|(_, s)| matches!(s, InteractSubject::Location(l) if *l == haven)));
+
+    // Pressing the party's row (no UiPlugin, so drive Interaction by hand) hails
+    // it and closes the menu.
+    app.world_mut()
+        .entity_mut(party_row)
+        .insert(Interaction::Pressed);
+    app.update();
     let acts = drain_actions(&mut app);
     assert!(acts
         .iter()
         .any(|a| matches!(a, WorldMapAction::InteractRequested { party: p, .. } if *p == party)));
-    assert!(!acts
+    assert!(!app.world().get::<InteractMenu>(map).unwrap().is_open());
+    assert!(menu_rows(&mut app, map).is_empty(), "rows despawn on close");
+}
+
+#[test]
+fn two_parties_in_reach_are_both_intercepted() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    set_tile_pos(&mut app, player, Vec2::new(3.5, 5.5));
+    let a = spawn_party(&mut app, map, Vec2::new(3.5, 5.5), 1.0);
+    let b = spawn_party(&mut app, map, Vec2::new(3.5, 5.5), 1.0);
+    drain_actions(&mut app);
+
+    app.update();
+    let intercepted = app.world().get::<Intercepting>(player).unwrap().0.clone();
+    assert_eq!(intercepted.len(), 2);
+    assert!(intercepted.contains(&a) && intercepted.contains(&b));
+    let hits = drain_actions(&mut app)
+        .iter()
+        .filter(|x| matches!(x, WorldMapAction::PartyIntercepted { .. }))
+        .count();
+    assert_eq!(hits, 2, "one PartyIntercepted per party");
+
+    // One walks off — exactly one PartyLeft, the other stays.
+    set_tile_pos(&mut app, b, Vec2::new(0.5, 0.5));
+    app.update();
+    let leaves: Vec<Entity> = drain_actions(&mut app)
+        .iter()
+        .filter_map(|x| match x {
+            WorldMapAction::PartyLeft { party, .. } => Some(*party),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(leaves, vec![b]);
+    assert_eq!(app.world().get::<Intercepting>(player).unwrap().0, vec![a]);
+}
+
+#[test]
+fn an_outside_click_closes_the_menu_without_travelling() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    set_tile_pos(&mut app, player, Vec2::new(1.5, 1.5));
+    let _party = spawn_party(&mut app, map, Vec2::new(1.5, 1.5), 1.0);
+    app.update();
+
+    // Open the menu.
+    let center = widget_center(&mut app, map, player);
+    set_cursor_world(&mut app, map, center);
+    click_left(&mut app);
+    app.update();
+    assert!(app.world().get::<InteractMenu>(map).unwrap().is_open());
+    drain_actions(&mut app);
+
+    // A click on a far tile just closes it — no course set.
+    set_cursor_tile(&mut app, map, Vec2::new(5.5, 5.5));
+    click_left(&mut app);
+    app.update();
+
+    assert!(!app.world().get::<InteractMenu>(map).unwrap().is_open());
+    assert_eq!(target(&mut app, player), None);
+    assert!(!drain_actions(&mut app)
         .iter()
         .any(|a| matches!(a, WorldMapAction::TargetSet { .. })));
 }
