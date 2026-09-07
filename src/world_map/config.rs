@@ -44,14 +44,30 @@ pub struct WorldMapConfig {
     /// [`reveal_radius_tiles`](Self::reveal_radius_tiles); `None` disables
     /// proximity reveal for secrets only.
     pub secret_reveal_radius_tiles: Option<f32>,
-    /// Click radius, in world units, of the "enter this place" widget that
-    /// appears once the traveller is standing on a location.
-    pub enter_widget_radius_px: f32,
+    /// How close (in tiles) a [`Party`](super::Party) must come to the player
+    /// for [`track_intercepts`](super::track_intercepts) to register contact.
+    /// `None` disables interception entirely.
+    pub intercept_radius_tiles: Option<f32>,
+    /// How far above the token, in world units, the "interact" widget squares
+    /// sit.
+    pub interact_widget_offset_px: f32,
+    /// Half the edge length, in world units, of one "interact" widget square —
+    /// its click hit box and its drawn size both.
+    pub interact_widget_half_px: f32,
+    /// Gap, in world units, between the two "interact" widget squares when both
+    /// a location and a party are in reach.
+    pub interact_widget_gap_px: f32,
     /// Heading shown above the aside list. `None` draws no heading row.
     pub title: Option<Cow<'static, str>>,
     /// Show the live `you … · cursor …` tile-coordinate line in the aside — the
     /// aiming aid a sub-tile secret hunt needs. `false` hides it.
     pub show_coords: bool,
+    /// Pause [`WorldMapTime`](super::WorldMapTime) — and so all party movement
+    /// and the clock — whenever the player isn't travelling (the Fallout 1/2
+    /// overworld: it only runs while you walk). `false` runs the world
+    /// continuously in real time. A [`WorldClockHold`](super::WorldClockHold) on
+    /// the map keeps time flowing regardless.
+    pub pause_time_when_idle: bool,
 }
 
 impl Default for WorldMapConfig {
@@ -64,9 +80,13 @@ impl Default for WorldMapConfig {
             follow_lerp: 12.0,
             reveal_radius_tiles: Some(1.6),
             secret_reveal_radius_tiles: Some(0.15),
-            enter_widget_radius_px: 22.0,
+            intercept_radius_tiles: Some(0.35),
+            interact_widget_offset_px: 26.0,
+            interact_widget_half_px: 11.0,
+            interact_widget_gap_px: 6.0,
             title: Some(Cow::Borrowed("WORLD MAP")),
             show_coords: true,
+            pause_time_when_idle: true,
         }
     }
 }
@@ -90,19 +110,26 @@ pub struct WorldMapTheme {
     pub secret_location_color: Color,
     pub location_label_color: Color,
     pub location_label_font_size: f32,
-    /// Gap between the top of a location's circle and its name label.
+    /// Gap between the top of a location's circle and its name label. Reused for
+    /// a [`Party`](super::Party)'s name label.
     pub location_label_gap_px: f32,
     pub traveler_radius_px: f32,
     pub traveler_color: Color,
     pub target_marker_radius_px: f32,
     pub target_marker_color: Color,
-    /// Edge length of the triangular "enter" widget.
-    pub enter_widget_size_px: f32,
+    /// Half-diagonal of a [`Party`](super::Party)'s diamond token.
+    pub party_radius_px: f32,
+    pub party_label_color: Color,
+    /// Fill of the "interact" widget square over an intercepted party (the
+    /// location square uses [`enter_widget_color`](Self::enter_widget_color)).
+    pub party_widget_color: Color,
     pub enter_widget_color: Color,
     pub z_tiles: f32,
     pub z_target: f32,
     pub z_locations: f32,
     pub z_labels: f32,
+    /// Party tokens sit just under the player token.
+    pub z_party: f32,
     pub z_traveler: f32,
     pub z_enter_widget: f32,
     pub aside_background: Color,
@@ -139,12 +166,15 @@ impl Default for WorldMapTheme {
             traveler_color: Color::srgb(0.95, 0.35, 0.3),
             target_marker_radius_px: 4.0,
             target_marker_color: Color::srgba(0.95, 0.35, 0.3, 0.7),
-            enter_widget_size_px: 20.0,
+            party_radius_px: 7.0,
+            party_label_color: Color::srgb(0.9, 0.9, 0.82),
+            party_widget_color: Color::srgb(0.55, 0.75, 0.95),
             enter_widget_color: Color::srgb(0.4, 0.9, 0.5),
             z_tiles: 0.0,
             z_target: 1.0,
             z_locations: 2.0,
             z_labels: 3.0,
+            z_party: 3.5,
             z_traveler: 4.0,
             z_enter_widget: 5.0,
             aside_background: Color::srgba(0.10, 0.11, 0.14, 0.96),

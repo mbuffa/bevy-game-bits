@@ -15,7 +15,10 @@ use bevy::prelude::*;
 use bevy::time::TimePlugin;
 
 use bevy_game_bits::world_map::prelude::*;
-use bevy_game_bits::world_map::{tile_to_world, AsideRow, SecretLocation, TravelProgress};
+use bevy_game_bits::world_map::{
+    interact_widget_layout, tile_to_world, AsideRow, InteractSubject, SecretLocation,
+    TravelProgress,
+};
 
 /// `TimePlugin` is disabled so the generic `Time` resource is ours to drive:
 /// its `time_system` would otherwise clobber a manual `advance_by` back to a
@@ -79,12 +82,43 @@ fn spawn_map(app: &mut App, data: WorldMapData) -> Entity {
 
 fn traveler_of(app: &mut App, map: Entity) -> Entity {
     app.world_mut()
-        .run_system_once(move |q: Query<(Entity, &Traveler)>| {
+        .run_system_once(move |q: Query<(Entity, &Traveler), With<PlayerTraveler>>| {
             q.iter()
                 .find_map(|(e, t)| (t.map == map).then_some(e))
-                .expect("traveller exists")
+                .expect("player traveller exists")
         })
         .unwrap()
+}
+
+/// Spawns a host-driven party on `map` and returns its entity.
+fn spawn_party(app: &mut App, map: Entity, tile: Vec2, speed: f32) -> Entity {
+    app.world_mut()
+        .run_system_once(move |mut commands: Commands| {
+            commands
+                .spawn((
+                    party_bundle(
+                        map,
+                        tile,
+                        Party {
+                            name: "Caravan".to_string(),
+                            color: Color::WHITE,
+                        },
+                    ),
+                    TravelSpeed(speed),
+                ))
+                .id()
+        })
+        .unwrap()
+}
+
+/// Pins `WorldClockHold` on the map so world time runs even while the player is
+/// idle (the host's timed-action seam).
+fn hold_clock(app: &mut App, map: Entity) {
+    app.world_mut().entity_mut(map).insert(WorldClockHold);
+}
+
+fn world_time(app: &mut App, map: Entity) -> WorldMapTime {
+    *app.world().get::<WorldMapTime>(map).unwrap()
 }
 
 fn set_cursor_tile(app: &mut App, map: Entity, tile: Vec2) {
@@ -98,6 +132,17 @@ fn set_cursor_tile(app: &mut App, map: Entity, tile: Vec2) {
 
 fn set_tile_pos(app: &mut App, traveler: Entity, tile: Vec2) {
     app.world_mut().get_mut::<TilePos>(traveler).unwrap().0 = tile;
+}
+
+fn set_cursor_world(app: &mut App, map: Entity, world: Vec2) {
+    let (size, tile_px) = {
+        let grid = app.world().get::<WorldMapGrid>(map).unwrap();
+        (grid.size_px(), grid.tile_px())
+    };
+    let mut cursor = app.world_mut().get_mut::<WorldMapCursor>(map).unwrap();
+    cursor.world = world;
+    cursor.tile = world_to_tile(world, size, tile_px);
+    cursor.valid = true;
 }
 
 fn tile_pos(app: &mut App, traveler: Entity) -> Vec2 {
@@ -284,9 +329,21 @@ fn stepping_onto_a_location_is_reported_and_the_widget_can_be_entered() {
         Some(location)
     );
 
-    // A click right on the token now means "enter", not "walk one over".
-    let here = tile_pos(&mut app, traveler);
-    set_cursor_tile(&mut app, map, here);
+    // A click on the interact-widget square (above the token) means "enter",
+    // not "walk one over".
+    let (size, tile_px) = {
+        let g = app.world().get::<WorldMapGrid>(map).unwrap();
+        (g.size_px(), g.tile_px())
+    };
+    let config = app.world().get::<WorldMapConfig>(map).unwrap().clone();
+    let token_world = tile_to_world(tile_pos(&mut app, traveler), size, tile_px);
+    let (_, widget) = interact_widget_layout(
+        token_world,
+        [Some(InteractSubject::Location(location)), None],
+        &config,
+    )[0]
+    .unwrap();
+    set_cursor_world(&mut app, map, widget);
     click_left(&mut app);
     let actions = drain_actions(&mut app);
     assert!(actions.iter().any(|a| matches!(
@@ -451,6 +508,284 @@ fn an_undiscovered_location_is_never_reached() {
             .any(|a| matches!(a, WorldMapAction::LocationReached { .. })),
         "an unseen location is not somewhere you've reached"
     );
+}
+
+#[test]
+fn a_click_does_not_steer_parties() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    let party = spawn_party(&mut app, map, Vec2::new(3.5, 3.5), 1.0);
+    drain_actions(&mut app);
+
+    set_cursor_tile(&mut app, map, Vec2::new(5.5, 5.5));
+    click_left(&mut app);
+
+    assert_eq!(target(&mut app, player), Some(Vec2::new(5.5, 5.5)));
+    assert_eq!(
+        target(&mut app, party),
+        None,
+        "the click must not touch a host-driven party"
+    );
+}
+
+#[test]
+fn a_party_walks_at_its_own_speed() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let party = spawn_party(&mut app, map, Vec2::new(0.5, 5.5), 0.6);
+    // The player is idle, so hold the clock open — otherwise world time (and the
+    // party) is frozen.
+    hold_clock(&mut app, map);
+
+    // Plains: the full TravelSpeed, independent of the config's 1.2 tiles/s.
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(5.5, 5.5));
+    advance(&mut app, 0.05);
+    let plains = progress(&mut app, party).tiles_this_frame;
+    assert!((plains - 0.6 * 0.05).abs() < 1.0e-4, "plains step {plains}");
+
+    // Water (speed 0.3 in the demo) scales it the same way it scales the player.
+    set_tile_pos(&mut app, party, Vec2::new(2.5, 2.5));
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(2.5, 5.5));
+    advance(&mut app, 0.05);
+    let water = progress(&mut app, party).tiles_this_frame;
+    assert!(
+        (water / plains - 0.3).abs() < 1.0e-3,
+        "ratio {}",
+        water / plains
+    );
+}
+
+#[test]
+fn intercepting_a_party_fires_once_then_ends_on_separation() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    let party = spawn_party(&mut app, map, Vec2::new(2.5, 5.5), 1.0);
+    set_tile_pos(&mut app, player, Vec2::new(2.5, 5.5));
+    drain_actions(&mut app);
+
+    app.update();
+    let (mut intercepts, mut leaves) = (0, 0);
+    for a in drain_actions(&mut app) {
+        match a {
+            WorldMapAction::PartyIntercepted { party: p, .. } if p == party => intercepts += 1,
+            WorldMapAction::PartyLeft { .. } => leaves += 1,
+            _ => {}
+        }
+    }
+    assert_eq!((intercepts, leaves), (1, 0));
+    assert_eq!(
+        app.world().get::<Intercepting>(player).unwrap().0,
+        Some(party)
+    );
+
+    // Holding contact doesn't re-fire.
+    app.update();
+    assert!(!drain_actions(&mut app)
+        .iter()
+        .any(|a| matches!(a, WorldMapAction::PartyIntercepted { .. })));
+
+    // Separating fires PartyLeft.
+    set_tile_pos(&mut app, party, Vec2::new(5.5, 5.5));
+    app.update();
+    assert!(drain_actions(&mut app)
+        .iter()
+        .any(|a| matches!(a, WorldMapAction::PartyLeft { party: p, .. } if *p == party)));
+    assert_eq!(app.world().get::<Intercepting>(player).unwrap().0, None);
+}
+
+#[test]
+fn a_fast_crossing_still_intercepts() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    let party = spawn_party(&mut app, map, Vec2::new(5.5, 5.5), 2.0);
+
+    set_tile_pos(&mut app, player, Vec2::new(0.5, 5.5));
+    app.world_mut().get_mut::<TravelTarget>(player).unwrap().0 = Some(Vec2::new(5.5, 5.5));
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(0.5, 5.5));
+    drain_actions(&mut app);
+
+    // One big frame: they swap ends, passing through each other mid-step.
+    advance(&mut app, 5.0);
+
+    let (p, q) = (tile_pos(&mut app, player), tile_pos(&mut app, party));
+    assert!(p.distance(q) > 4.0, "end points far apart: {p} vs {q}");
+    assert!(
+        drain_actions(&mut app).iter().any(
+            |a| matches!(a, WorldMapAction::PartyIntercepted { party: pp, .. } if *pp == party)
+        ),
+        "the swept test catches a crossing the end points miss"
+    );
+}
+
+#[test]
+fn a_party_does_not_reveal_locations() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    set_tile_pos(&mut app, player, Vec2::new(0.5, 0.5));
+
+    let ford = app
+        .world_mut()
+        .run_system_once(|q: Query<(Entity, &Location, &Discovered)>| {
+            q.iter()
+                .find_map(|(e, l, d)| (l.id == "ford" && !d.0).then_some(e))
+                .expect("undiscovered Ford")
+        })
+        .unwrap();
+
+    // Park the party right on the Ford — reveal only ever considers the player.
+    let _party = spawn_party(&mut app, map, Vec2::new(4.5, 4.5), 1.0);
+    drain_actions(&mut app);
+    for _ in 0..3 {
+        advance(&mut app, 0.1);
+    }
+
+    assert!(!app.world().get::<Discovered>(ford).unwrap().0);
+    assert!(!drain_actions(&mut app).iter().any(
+        |a| matches!(a, WorldMapAction::LocationDiscovered { location, .. } if *location == ford)
+    ));
+}
+
+#[test]
+fn time_freezes_while_the_player_is_idle() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let party = spawn_party(&mut app, map, Vec2::new(1.5, 5.5), 1.0);
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(5.5, 5.5));
+
+    let before = tile_pos(&mut app, party);
+    for _ in 0..5 {
+        advance(&mut app, 0.5);
+    }
+
+    assert_eq!(
+        tile_pos(&mut app, party),
+        before,
+        "a caravan doesn't move while the player stands still"
+    );
+    assert_eq!(world_time(&mut app, map).delta_secs, 0.0);
+    assert_eq!(world_time(&mut app, map).elapsed_secs, 0.0);
+}
+
+#[test]
+fn time_runs_while_the_player_travels() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    let party = spawn_party(&mut app, map, Vec2::new(1.5, 5.5), 1.0);
+
+    set_tile_pos(&mut app, player, Vec2::new(0.5, 5.5));
+    app.world_mut().get_mut::<TravelTarget>(player).unwrap().0 = Some(Vec2::new(4.5, 5.5));
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(5.5, 5.5));
+
+    let before = tile_pos(&mut app, party);
+    advance(&mut app, 0.3);
+
+    assert!(
+        tile_pos(&mut app, party).x > before.x + 1.0e-4,
+        "the caravan moves while the player travels"
+    );
+    assert!(world_time(&mut app, map).elapsed_secs > 0.0);
+}
+
+#[test]
+fn pause_time_when_idle_false_keeps_parties_moving() {
+    let mut app = new_app();
+    let source = WorldMapSource::Inline(Box::new(WorldMapData::demo()));
+    let map = app
+        .world_mut()
+        .run_system_once(move |mut commands: Commands| {
+            spawn_world_map(
+                &mut commands,
+                WorldMapSpec {
+                    source: source.clone(),
+                    config: WorldMapConfig {
+                        pause_time_when_idle: false,
+                        ..default()
+                    },
+                    ..default()
+                },
+            )
+        })
+        .unwrap();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let party = spawn_party(&mut app, map, Vec2::new(1.5, 5.5), 1.0);
+    app.world_mut().get_mut::<TravelTarget>(party).unwrap().0 = Some(Vec2::new(5.5, 5.5));
+    let before = tile_pos(&mut app, party);
+    advance(&mut app, 0.3);
+
+    assert!(
+        tile_pos(&mut app, party).x > before.x + 1.0e-4,
+        "with pause_time_when_idle=false the world runs even while the player is idle"
+    );
+}
+
+#[test]
+fn both_widgets_offer_separate_squares() {
+    let mut app = new_app();
+    let map = spawn_map(&mut app, WorldMapData::demo());
+    let player = traveler_of(&mut app, map);
+    set_tile_pos(&mut app, player, Vec2::new(1.5, 1.5)); // Haven's cell, discovered
+    let party = spawn_party(&mut app, map, Vec2::new(1.5, 1.5), 1.0);
+
+    app.update();
+    let haven = app
+        .world()
+        .get::<AtLocation>(player)
+        .unwrap()
+        .0
+        .expect("standing on Haven");
+    assert_eq!(
+        app.world().get::<Intercepting>(player).unwrap().0,
+        Some(party)
+    );
+    drain_actions(&mut app);
+
+    let (size, tile_px) = {
+        let g = app.world().get::<WorldMapGrid>(map).unwrap();
+        (g.size_px(), g.tile_px())
+    };
+    let config = app.world().get::<WorldMapConfig>(map).unwrap().clone();
+    let token_world = tile_to_world(Vec2::new(1.5, 1.5), size, tile_px);
+    let layout = interact_widget_layout(
+        token_world,
+        [
+            Some(InteractSubject::Location(haven)),
+            Some(InteractSubject::Party(party)),
+        ],
+        &config,
+    );
+    let (_, slot0) = layout[0].unwrap();
+    let (_, slot1) = layout[1].unwrap();
+
+    // Slot 0's square enters the location; no travel.
+    set_cursor_world(&mut app, map, slot0);
+    click_left(&mut app);
+    let acts = drain_actions(&mut app);
+    assert!(acts.iter().any(
+        |a| matches!(a, WorldMapAction::EnterRequested { location, .. } if *location == haven)
+    ));
+    assert!(!acts
+        .iter()
+        .any(|a| matches!(a, WorldMapAction::TargetSet { .. })));
+    assert_eq!(target(&mut app, player), None);
+
+    // Slot 1's square hails the party; no travel.
+    set_cursor_world(&mut app, map, slot1);
+    click_left(&mut app);
+    let acts = drain_actions(&mut app);
+    assert!(acts
+        .iter()
+        .any(|a| matches!(a, WorldMapAction::InteractRequested { party: p, .. } if *p == party)));
+    assert!(!acts
+        .iter()
+        .any(|a| matches!(a, WorldMapAction::TargetSet { .. })));
 }
 
 #[test]

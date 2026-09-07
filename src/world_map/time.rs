@@ -1,16 +1,18 @@
-//! An optional in-game clock that only ticks while a traveller is moving.
+//! An optional Day/HH:MM calendar layered on [`WorldMapTime`].
 //!
-//! This is the "bring your own `GameTime`" seam: add
-//! [`WorldMapTimePlugin`] and the module keeps [`WorldMapClock`] and draws a
-//! clock chip; leave it out and read [`TravelProgress`](super::TravelProgress)
-//! from your own system ordered `.after(WorldMapSet::Travel)`.
+//! [`WorldMapTime`] (core) is the raw per-frame world-time tick — it already
+//! only advances while the player travels. This is the "bring your own
+//! `GameTime`" seam: add [`WorldMapTimePlugin`] and the module keeps
+//! [`WorldMapClock`] and draws a clock chip; leave it out and read
+//! [`WorldMapTime`] or [`TravelProgress`](super::TravelProgress) from your own
+//! system ordered `.after(WorldMapSet::Travel)`.
 //!
 //! Slow terrain needs no special handling here — it just means more real
 //! seconds spent moving, which this already charges for.
 
 use bevy::prelude::*;
 
-use crate::world_map::travel::TravelProgress;
+use crate::world_map::travel::WorldMapTime;
 use crate::world_map::WorldMapSet;
 
 /// Wall-clock-ish in-game time. `elapsed_minutes` counts in-game minutes since
@@ -54,16 +56,17 @@ impl WorldMapClock {
     }
 }
 
-/// Advances [`WorldMapClock`] whenever any traveller moved this frame.
-pub fn advance_clock(
-    time: Res<Time>,
-    mut clock: ResMut<WorldMapClock>,
-    travelers: Query<&TravelProgress>,
-) {
-    if !travelers.iter().any(|p| p.moving) {
+/// Advances [`WorldMapClock`] by this frame's [`WorldMapTime`] — so it moves
+/// exactly when the world does (the player travelling, or a
+/// [`WorldClockHold`](super::WorldClockHold)), and not while a caravan crosses
+/// the map on its own. With several maps the fastest-advancing one drives the
+/// one shared calendar.
+pub fn advance_clock(mut clock: ResMut<WorldMapClock>, times: Query<&WorldMapTime>) {
+    let dt = times.iter().map(|t| t.delta_secs).fold(0.0_f32, f32::max);
+    if dt <= 0.0 {
         return;
     }
-    clock.elapsed_minutes += (time.delta_secs() * clock.minutes_per_second) as f64;
+    clock.elapsed_minutes += (dt * clock.minutes_per_second) as f64;
 }
 
 /// Keeps [`WorldMapClock`] and draws the clock chip. Independent of
