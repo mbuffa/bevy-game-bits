@@ -27,12 +27,21 @@
 //! skin, or the layout, or spawn maps yourself with [`spawn_world_map`] after
 //! [`WorldMapPlugin::headless`].
 //!
+//! # Time only moves when you do
+//!
+//! [`WorldMapTime`] (a component on the map entity) is the per-frame world-time
+//! budget [`travel`] moves *every* traveller by — the player and every
+//! [`Party`]. It runs while the player is travelling and pauses when they stop
+//! ([`WorldMapConfig::pause_time_when_idle`], on by default), so caravans freeze
+//! with you and can actually be intercepted. Drop a [`WorldClockHold`] on the
+//! map to keep it running through a non-travel action (resting, repairing).
+//!
 //! # Bringing your own clock
 //!
 //! [`WorldMapTimePlugin`] is a separate, optional add-on — it owns
-//! [`WorldMapClock`] and draws the clock chip. Leave it out and read
-//! [`TravelProgress`] (tiles moved this frame, tiles remaining) from your own
-//! system ordered `.after(WorldMapSet::Travel)`.
+//! [`WorldMapClock`], the Day/HH:MM calendar layered on [`WorldMapTime`], and
+//! draws the clock chip. Leave it out and read [`WorldMapTime`] /
+//! [`TravelProgress`] from your own system ordered `.after(WorldMapSet::Travel)`.
 //!
 //! # The pieces
 //!
@@ -55,6 +64,25 @@
 //! the traveller walks almost exactly over it, within the far tighter
 //! [`WorldMapConfig::secret_reveal_radius_tiles`]. The check sweeps the whole
 //! segment travelled each frame, so a fast frame can't skip the spot.
+//!
+//! # Parties
+//!
+//! Caravans, patrols and raiding parties are [`Party`] tokens the **host**
+//! drives. Build one with [`party_bundle`]; it's a second [`Traveler`], so
+//! [`travel`] moves it with terrain scaling and [`TravelProgress`] reports it
+//! for free — and only while [`WorldMapTime`] runs, so a party freezes the
+//! moment the player stops. The module ships no AI: the host writes its
+//! [`TravelTarget`] and
+//! flips its [`Spotted`] flag to say whether the player sees it (the seam a
+//! spot-at-a-distance or radio feature plugs into). What it *does* own is
+//! contact — [`track_intercepts`] sets the player's [`Intercepting`] and fires
+//! [`WorldMapAction::PartyIntercepted`] when a party comes within
+//! [`WorldMapConfig::intercept_radius_tiles`], swept so a fast frame can't
+//! tunnel through. The "enter" affordance is now a square "interact" widget:
+//! two squares side by side when you're on a location and intercepting a party,
+//! each firing its own action. Only the [`PlayerTraveler`] is steered by
+//! clicks — a caravan isn't.
+//!
 //! - [`ui`] — [`spawn_world_map`], the tile/token drawing, the aside, and the
 //!   camera.
 //! - [`time`] — the optional [`WorldMapClock`] and [`WorldMapTimePlugin`].
@@ -67,10 +95,10 @@
 //!
 //! There's no pathfinding — routing around the mountains is the player's job.
 //! Terrain is sampled once per frame at the traveller's current cell, so a
-//! single fast frame could skim the corner of a slow tile. The "enter" widget
-//! is hit-tested as a disc just above the token, so a click on the very next
-//! tile up, close to the token, can read as "enter" rather than "travel". The
-//! camera systems assume one map is on screen at a time.
+//! single fast frame could skim the corner of a slow tile. The interact-widget
+//! squares sit just above the token, so a click on the very next tile up, close
+//! to the token, can read as "interact" rather than "travel". The camera
+//! systems assume one map is on screen at a time.
 
 pub mod asset;
 pub mod config;
@@ -92,26 +120,31 @@ pub use data::{
 };
 pub use time::{advance_clock, WorldMapClock, WorldMapTimePlugin};
 pub use travel::{
-    cancel_target, handle_click, point_segment_distance, reveal_locations, track_cursor,
-    track_location, travel, AtLocation, Discovered, Location, SecretLocation, TilePos,
-    TravelProgress, TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor,
+    cancel_target, handle_click, in_interact_square, interact_widget_layout, party_bundle,
+    point_segment_distance, reveal_locations, tick_world_time, time_advancing, track_cursor,
+    track_intercepts, track_location, travel, AtLocation, Discovered, InteractSubject,
+    Intercepting, Location, Party, PlayerTraveler, SecretLocation, Spotted, TilePos,
+    TravelProgress, TravelSpeed, TravelTarget, Traveler, WorldClockHold, WorldMapAction,
+    WorldMapCamera, WorldMapCursor, WorldMapTime,
 };
 pub use ui::{
-    build_map_visuals, follow_and_clamp_camera, pan_camera, refollow_on_new_target, resolve_map,
-    spawn_world_map, sync_aside, sync_clock_label, sync_coords_label, sync_enter_widget,
-    sync_location_visibility, sync_status_text, sync_target_marker, sync_traveler_transform,
-    travel_to_aside_row, AsideRow, EnterWidget, TargetMarker, WorldMapParts, WorldMapRoot,
-    WorldMapTile, WorldMapView,
+    build_map_visuals, build_party_visuals, follow_and_clamp_camera, pan_camera,
+    refollow_on_new_target, resolve_map, spawn_world_map, sync_aside, sync_clock_label,
+    sync_coords_label, sync_interact_widgets, sync_location_visibility, sync_party_visibility,
+    sync_status_text, sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow,
+    InteractWidget, TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile, WorldMapView,
 };
 
 /// Everything you need to build and drive a world map, in one import.
 pub mod prelude {
     pub use super::{
-        cell_of, spawn_world_map, tile_to_world, world_to_tile, AsideSide, AtLocation,
-        DefaultWorldMap, Discovered, Location, SecretLocation, TilePos, TravelProgress,
-        TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapClock, WorldMapConfig,
-        WorldMapCursor, WorldMapData, WorldMapGrid, WorldMapLayout, WorldMapPlugin, WorldMapSet,
-        WorldMapSource, WorldMapSpec, WorldMapTheme, WorldMapTimePlugin, WorldMapView,
+        cell_of, party_bundle, spawn_world_map, tile_to_world, world_to_tile, AsideSide,
+        AtLocation, DefaultWorldMap, Discovered, InteractSubject, Intercepting, Location, Party,
+        PlayerTraveler, SecretLocation, Spotted, TilePos, TravelProgress, TravelSpeed,
+        TravelTarget, Traveler, WorldClockHold, WorldMapAction, WorldMapCamera, WorldMapClock,
+        WorldMapConfig, WorldMapCursor, WorldMapData, WorldMapGrid, WorldMapLayout, WorldMapPlugin,
+        WorldMapSet, WorldMapSource, WorldMapSpec, WorldMapTheme, WorldMapTime, WorldMapTimePlugin,
+        WorldMapView,
     };
 }
 
@@ -128,9 +161,9 @@ pub enum WorldMapSet {
     /// `Update`, after [`Build`](Self::Build). Cursor tracking, the click and
     /// `Space` handlers, and camera panning.
     Input,
-    /// `Update`, after [`Input`](Self::Input). [`travel`],
-    /// [`reveal_locations`], [`track_location`]. Read [`TravelProgress`] after
-    /// this.
+    /// `Update`, after [`Input`](Self::Input). [`tick_world_time`], [`travel`],
+    /// [`reveal_locations`], [`track_location`], [`track_intercepts`]. Read
+    /// [`TravelProgress`] / [`WorldMapTime`] after this.
     Travel,
     /// `Update`, after [`Travel`](Self::Travel). The `sync_*` systems and the
     /// follow/clamp camera.
@@ -222,9 +255,11 @@ impl Plugin for WorldMapPlugin {
             .add_systems(
                 Update,
                 (
+                    travel::tick_world_time,
                     travel::travel,
                     travel::reveal_locations,
                     travel::track_location,
+                    travel::track_intercepts,
                 )
                     .chain()
                     .in_set(WorldMapSet::Travel),
@@ -233,8 +268,9 @@ impl Plugin for WorldMapPlugin {
                 Update,
                 (
                     ui::sync_target_marker,
-                    ui::sync_enter_widget,
+                    ui::sync_interact_widgets,
                     ui::sync_location_visibility,
+                    ui::sync_party_visibility,
                     ui::sync_aside,
                     ui::sync_clock_label,
                     ui::sync_coords_label,
@@ -247,9 +283,11 @@ impl Plugin for WorldMapPlugin {
         if self.visuals {
             app.add_systems(
                 Update,
-                ui::build_map_visuals
-                    .in_set(WorldMapSet::Build)
-                    .after(ui::resolve_map),
+                (
+                    ui::build_map_visuals.after(ui::resolve_map),
+                    ui::build_party_visuals,
+                )
+                    .in_set(WorldMapSet::Build),
             );
         }
 

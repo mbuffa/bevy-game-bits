@@ -18,8 +18,9 @@ use crate::world_map::config::{
 use crate::world_map::data::{tile_to_world, WorldMapData, WorldMapGrid};
 use crate::world_map::time::WorldMapClock;
 use crate::world_map::travel::{
-    traveler_world, AtLocation, Discovered, Location, SecretLocation, TilePos, TravelProgress,
-    TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor,
+    interact_widget_layout, traveler_world, AtLocation, Discovered, InteractSubject, Intercepting,
+    Location, Party, PlayerTraveler, SecretLocation, Spotted, TilePos, TravelProgress,
+    TravelTarget, Traveler, WorldMapAction, WorldMapCamera, WorldMapCursor, WorldMapTime,
 };
 
 /// Marks the root entity of one map — carries every per-map component and is
@@ -72,10 +73,19 @@ pub struct WorldMapTile;
 #[derive(Component)]
 pub struct TargetMarker(pub Entity);
 
-/// The clickable "enter this place" triangle. One per traveller; `.0` is the
-/// traveller entity.
+/// One square of the clickable "interact" widget over the player token. Two per
+/// player traveller: `slot` 0 acts on the location under the token, `slot` 1 on
+/// an intercepted [`Party`]. Each shows only when its subject is present.
 #[derive(Component)]
-pub struct EnterWidget(pub Entity);
+pub struct InteractWidget {
+    pub traveler: Entity,
+    pub slot: usize,
+}
+
+/// Set once [`build_party_visuals`] has drawn a [`Party`]'s token, so it draws
+/// each once — even a party the host spawns mid-game.
+#[derive(Component)]
+pub struct PartyVisualsBuilt;
 
 /// One aside row. `location` is the [`Location`] entity it stands for, `map`
 /// the map it belongs to (rows aren't children of the map, so they carry the
@@ -200,6 +210,7 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
             theme,
             layout,
             WorldMapCursor::default(),
+            WorldMapTime::default(),
             Transform::default(),
             Visibility::default(),
             WorldMapParts {
@@ -281,9 +292,11 @@ pub fn resolve_map(
         let traveler = commands
             .spawn((
                 Traveler { map },
+                PlayerTraveler,
                 TilePos(start),
                 TravelTarget::default(),
                 AtLocation::default(),
+                Intercepting::default(),
                 TravelProgress::default(),
                 Transform::from_translation(traveler_world(&grid, start).extend(0.0)),
                 Visibility::default(),
@@ -291,7 +304,8 @@ pub fn resolve_map(
             ))
             .id();
         commands.spawn((TargetMarker(traveler), map_child(map)));
-        commands.spawn((EnterWidget(traveler), map_child(map)));
+        commands.spawn((InteractWidget { traveler, slot: 0 }, map_child(map)));
+        commands.spawn((InteractWidget { traveler, slot: 1 }, map_child(map)));
 
         // Locations. `from_data` succeeded above, so `tile_pos()` is `Some`.
         for location in &data.locations {
@@ -373,18 +387,18 @@ pub fn build_map_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     maps: Query<
-        (Entity, &WorldMapGrid, &WorldMapTheme),
+        (Entity, &WorldMapGrid, &WorldMapConfig, &WorldMapTheme),
         (With<WorldMapView>, Without<WorldMapVisualsBuilt>),
     >,
-    tokens: Query<(Entity, &Traveler)>,
+    tokens: Query<(Entity, &Traveler), With<PlayerTraveler>>,
     markers: Query<(Entity, &TargetMarker)>,
-    widgets: Query<(Entity, &EnterWidget)>,
+    widgets: Query<(Entity, &InteractWidget)>,
     locations: Query<(Entity, &Location, &ChildOf, Has<SecretLocation>)>,
     rows: Query<(Entity, &AsideRow)>,
     row_texts: Query<(Entity, &ChildOf), With<AsideRowText>>,
     mut text_fonts: Query<&mut TextFont>,
 ) {
-    for (map, grid, theme) in &maps {
+    for (map, grid, config, theme) in &maps {
         let size = grid.size_px();
         let tile_px = grid.tile_px();
         let inset = theme.tile_inset_px;
@@ -452,24 +466,29 @@ pub fn build_map_visuals(
             ));
         }
 
-        // Enter widget (triangle).
-        let s = theme.enter_widget_size_px;
-        let tri = meshes.add(Triangle2d::new(
-            Vec2::new(0.0, s * 0.6),
-            Vec2::new(-s * 0.5, -s * 0.4),
-            Vec2::new(s * 0.5, -s * 0.4),
+        // Interact widget — one square mesh, a green material for the "enter a
+        // location" slot and a cooler one for the "hail a party" slot.
+        let square = meshes.add(Rectangle::new(
+            2.0 * config.interact_widget_half_px,
+            2.0 * config.interact_widget_half_px,
         ));
-        let tri_mat = materials.add(ColorMaterial::from(theme.enter_widget_color));
+        let enter_mat = materials.add(ColorMaterial::from(theme.enter_widget_color));
+        let party_mat = materials.add(ColorMaterial::from(theme.party_widget_color));
         for (entity, widget) in &widgets {
-            let Ok((_, traveler)) = tokens.get(widget.0) else {
+            let Ok((_, traveler)) = tokens.get(widget.traveler) else {
                 continue;
             };
             if traveler.map != map {
                 continue;
             }
+            let mat = if widget.slot == 0 {
+                &enter_mat
+            } else {
+                &party_mat
+            };
             commands
                 .entity(entity)
-                .insert((Mesh2d(tri.clone()), MeshMaterial2d(tri_mat.clone())));
+                .insert((Mesh2d(square.clone()), MeshMaterial2d(mat.clone())));
         }
 
         // Location circles + name labels. Secrets get their own smaller dot.
@@ -524,18 +543,76 @@ pub fn build_map_visuals(
     }
 }
 
+/// Draws each [`Party`] token — a diamond in the party's own colour, with a
+/// name label — the first frame it's seen. Runs every frame over
+/// `Without<PartyVisualsBuilt>` (not once per map like [`build_map_visuals`]),
+/// so a caravan the host spawns mid-game still gets drawn. `visuals`-gated.
+pub fn build_party_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    themes: Query<&WorldMapTheme>,
+    parties: Query<(Entity, &Traveler, &Party), Without<PartyVisualsBuilt>>,
+) {
+    for (entity, traveler, party) in &parties {
+        let Ok(theme) = themes.get(traveler.map) else {
+            continue;
+        };
+        let mesh = meshes.add(RegularPolygon::new(theme.party_radius_px, 4));
+        let mat = materials.add(ColorMaterial::from(party.color));
+        commands
+            .entity(entity)
+            .insert((Mesh2d(mesh), MeshMaterial2d(mat), PartyVisualsBuilt));
+        let label_y = theme.party_radius_px
+            + theme.location_label_gap_px
+            + theme.location_label_font_size * 0.5;
+        commands.spawn((
+            Text2d::new(party.name.clone()),
+            TextFont {
+                font_size: theme.location_label_font_size,
+                ..default()
+            },
+            TextColor(theme.party_label_color),
+            Transform::from_xyz(0.0, label_y, theme.z_labels - theme.z_party),
+            ChildOf(entity),
+        ));
+    }
+}
+
+/// Mirrors each [`Party`]'s [`Spotted`] flag onto its `Visibility`. An
+/// idempotent every-frame mirror, **not** `Changed`-filtered: a party spawned
+/// with `Spotted(false)` has to come up hidden on its very first frame, with no
+/// transition to hook (inventory's `sync_window_visibility` lesson).
+pub fn sync_party_visibility(mut parties: Query<(&Spotted, &mut Visibility), With<Party>>) {
+    for (spotted, mut vis) in &mut parties {
+        let wanted = if spotted.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *vis != wanted {
+            *vis = wanted;
+        }
+    }
+}
+
 /// Mirrors each traveller's [`TilePos`] onto its `Transform`, and holds it at
 /// the right z-layer.
 pub fn sync_traveler_transform(
     maps: Query<(&WorldMapGrid, &WorldMapTheme)>,
-    mut travelers: Query<(&Traveler, &TilePos, &mut Transform), Changed<TilePos>>,
+    mut travelers: Query<(&Traveler, &TilePos, &mut Transform, Has<Party>), Changed<TilePos>>,
 ) {
-    for (traveler, pos, mut tf) in &mut travelers {
+    for (traveler, pos, mut tf, is_party) in &mut travelers {
         let Ok((grid, theme)) = maps.get(traveler.map) else {
             continue;
         };
         let w = traveler_world(grid, pos.0);
-        tf.translation = w.extend(theme.z_traveler);
+        let z = if is_party {
+            theme.z_party
+        } else {
+            theme.z_traveler
+        };
+        tf.translation = w.extend(z);
     }
 }
 
@@ -563,30 +640,35 @@ pub fn sync_target_marker(
     }
 }
 
-/// Positions and shows/hides the "enter" triangle — visible only while the
-/// traveller is standing on a location. Drawn centred
-/// [`WorldMapConfig::enter_widget_radius_px`] above the token, matching the
-/// hit test in [`handle_click`](super::handle_click).
-pub fn sync_enter_widget(
+/// Positions and shows/hides the two "interact" widget squares, reading the same
+/// [`interact_widget_layout`](super::interact_widget_layout) the click hit test
+/// does — so the square drawn is the square clicked. Slot 0 shows while the
+/// player stands on a location, slot 1 while a [`Party`] is intercepted.
+pub fn sync_interact_widgets(
     maps: Query<(&WorldMapGrid, &WorldMapConfig, &WorldMapTheme)>,
-    travelers: Query<(&Traveler, &TilePos, &AtLocation)>,
-    mut widgets: Query<(&EnterWidget, &mut Transform, &mut Visibility)>,
+    travelers: Query<(&Traveler, &TilePos, &AtLocation, &Intercepting)>,
+    mut widgets: Query<(&InteractWidget, &mut Transform, &mut Visibility)>,
 ) {
     for (widget, mut tf, mut vis) in &mut widgets {
-        let Ok((traveler, pos, at)) = travelers.get(widget.0) else {
+        let Ok((traveler, pos, at, intercepting)) = travelers.get(widget.traveler) else {
             *vis = Visibility::Hidden;
             continue;
         };
-        if at.0.is_none() {
-            *vis = Visibility::Hidden;
-            continue;
-        }
         let Ok((grid, config, theme)) = maps.get(traveler.map) else {
             continue;
         };
-        let base = traveler_world(grid, pos.0) + Vec2::new(0.0, config.enter_widget_radius_px);
-        tf.translation = base.extend(theme.z_enter_widget);
-        *vis = Visibility::Inherited;
+        let here = traveler_world(grid, pos.0);
+        let subjects = [
+            at.0.map(InteractSubject::Location),
+            intercepting.0.map(InteractSubject::Party),
+        ];
+        match interact_widget_layout(here, subjects, config)[widget.slot] {
+            Some((_, center)) => {
+                tf.translation = center.extend(theme.z_enter_widget);
+                *vis = Visibility::Inherited;
+            }
+            None => *vis = Visibility::Hidden,
+        }
     }
 }
 
@@ -687,7 +769,7 @@ fn coords_label(you: Vec2, cursor: Option<Vec2>) -> String {
 /// leaving that line hidden.
 pub fn sync_coords_label(
     maps: Query<(Entity, &WorldMapConfig, &WorldMapCursor, &WorldMapParts)>,
-    travelers: Query<(&Traveler, &TilePos)>,
+    travelers: Query<(&Traveler, &TilePos), With<PlayerTraveler>>,
     mut texts: Query<&mut Text>,
 ) {
     for (map, config, cursor, parts) in &maps {
@@ -708,15 +790,44 @@ pub fn sync_coords_label(
     }
 }
 
-/// Writes the one-line status text from the latest [`WorldMapAction`].
+/// Writes the one-line status text from the latest [`WorldMapAction`]. Actions
+/// carrying a `traveler` that isn't the [`PlayerTraveler`] (a caravan arriving,
+/// say) are dropped — the status line is the player's.
 pub fn sync_status_text(
     mut actions: MessageReader<WorldMapAction>,
     locations: Query<&Location>,
     secrets: Query<(), With<SecretLocation>>,
+    players: Query<(), With<PlayerTraveler>>,
+    parties: Query<&Party>,
     maps: Query<&WorldMapParts>,
     mut texts: Query<&mut Text>,
 ) {
     for action in actions.read() {
+        let traveler = match action {
+            WorldMapAction::TargetSet { traveler, .. }
+            | WorldMapAction::TargetCleared { traveler, .. }
+            | WorldMapAction::Arrived { traveler, .. }
+            | WorldMapAction::Blocked { traveler, .. }
+            | WorldMapAction::LocationReached { traveler, .. }
+            | WorldMapAction::LocationLeft { traveler, .. }
+            | WorldMapAction::EnterRequested { traveler, .. }
+            | WorldMapAction::PartyIntercepted { traveler, .. }
+            | WorldMapAction::PartyLeft { traveler, .. }
+            | WorldMapAction::InteractRequested { traveler, .. } => Some(*traveler),
+            WorldMapAction::Loaded { .. }
+            | WorldMapAction::LoadFailed { .. }
+            | WorldMapAction::LocationDiscovered { .. }
+            | WorldMapAction::LocationFocused { .. } => None,
+        };
+        if traveler.is_some_and(|t| !players.contains(t)) {
+            continue;
+        }
+        let party_name = |e: Entity| {
+            parties
+                .get(e)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|_| "a party".to_string())
+        };
         let (map, line) = match action {
             WorldMapAction::Loaded { map } => (*map, "Map loaded.".to_string()),
             WorldMapAction::LoadFailed { map, error } => (*map, format!("Map failed: {error}")),
@@ -748,6 +859,13 @@ pub fn sync_status_text(
                     Err(_) => "Entering…".to_string(),
                 },
             ),
+            WorldMapAction::PartyIntercepted { map, party, .. } => {
+                (*map, format!("Intercepted {}.", party_name(*party)))
+            }
+            WorldMapAction::PartyLeft { map, .. } => (*map, "Travelling…".to_string()),
+            WorldMapAction::InteractRequested { map, party, .. } => {
+                (*map, format!("Hailing {}…", party_name(*party)))
+            }
         };
         if let Ok(parts) = maps.get(map) {
             if let Ok(mut text) = texts.get_mut(parts.status_text) {
@@ -809,7 +927,7 @@ pub fn travel_to_aside_row(
     rows: Query<(&AsideRow, &Interaction), Changed<Interaction>>,
     locations: Query<(&Location, &Discovered)>,
     maps: Query<&WorldMapGrid>,
-    mut travelers: Query<(Entity, &Traveler, &mut TravelTarget)>,
+    mut travelers: Query<(Entity, &Traveler, &mut TravelTarget), With<PlayerTraveler>>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
     for (row, interaction) in &rows {
@@ -857,7 +975,7 @@ pub fn follow_and_clamp_camera(
         &WorldMapLayout,
         &WorldMapView,
     )>,
-    travelers: Query<(&Traveler, &TilePos, &TravelProgress)>,
+    travelers: Query<(&Traveler, &TilePos, &TravelProgress), With<PlayerTraveler>>,
 ) {
     let Some((map, grid, config, layout, view)) = maps.iter().next() else {
         return;

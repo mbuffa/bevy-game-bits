@@ -19,12 +19,64 @@ use crate::world_map::data::{cell_of, tile_to_world, world_to_tile, WorldMapGrid
 #[derive(Component, Default, Clone, Copy, Debug)]
 pub struct WorldMapCamera;
 
-/// The traveller token. `map` is the map entity it belongs to (its `ChildOf`
-/// parent too).
+/// A token that moves across a map — the player, or a host-driven [`Party`].
+/// `map` is the map entity it belongs to (its `ChildOf` parent too). Everything
+/// that moves shares [`travel`], so terrain scaling and [`TravelProgress`]
+/// reporting come for free.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Traveler {
     pub map: Entity,
 }
+
+/// Marker on the one traveller the module spawns for the player (in
+/// [`resolve_map`](super::resolve_map)). Every system that means "the player"
+/// and not "some caravan" filters on it — the click and `Space` handlers,
+/// location reveal, the aside-row jump, the follow camera, and the coordinate
+/// readout. One per map.
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct PlayerTraveler;
+
+/// A host-driven token: a caravan, a raiding party, a patrol. Build one with
+/// [`party_bundle`]; the host owns where it goes (write its [`TravelTarget`])
+/// and whether the player can see it (flip its [`Spotted`]). `color` is
+/// per-faction, so it rides on the component rather than a global
+/// `WorldMapTheme` — the same choice `TerrainData::color` makes.
+///
+/// Requires [`Spotted`] — `Spotted(true)` unless you spawn one explicitly
+/// alongside, so `(party_bundle(..), Spotted(false))` is fine.
+#[derive(Component, Clone, Debug)]
+#[require(Spotted)]
+pub struct Party {
+    pub name: String,
+    pub color: Color,
+}
+
+/// Whether the player can see this [`Party`]. Defaults to `true` (as a required
+/// component of [`Party`]); the module ships **no rule that changes it** — the
+/// host does, and this is the seam a "spot at a distance" or radio-overlap
+/// feature plugs into. It does **not** gate interception: an unspotted party
+/// still bumps into the player (that's the ambush).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Spotted(pub bool);
+
+impl Default for Spotted {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Per-traveller travel speed in tiles per second over `speed: 1.0` terrain,
+/// overriding [`WorldMapConfig::travel_tiles_per_sec`] for this token only.
+/// Standalone, not a [`Party`] field, so the player in a fast vehicle can carry
+/// it too. Terrain still scales it.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TravelSpeed(pub f32);
+
+/// The [`Party`] the player is currently in contact with, if any — the nearest
+/// one within [`WorldMapConfig::intercept_radius_tiles`]. Maintained by
+/// [`track_intercepts`]; the exact shape of [`AtLocation`].
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Intercepting(pub Option<Entity>);
 
 /// The traveller's position in **tile space** — the authoritative one. The
 /// `Transform` is kept in step with it by
@@ -46,7 +98,8 @@ pub struct AtLocation(pub Option<Entity>);
 /// The host's read seam for time — rewritten every frame by [`travel`].
 /// [`WorldMapTimePlugin`](super::WorldMapTimePlugin) reads it; a host with its
 /// own clock reads it from a system ordered `.after(WorldMapSet::Travel)`
-/// instead.
+/// instead. Every field reads **zero for every traveller** on a frame where
+/// [`WorldMapTime`] is paused (see [`tick_world_time`]).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct TravelProgress {
     /// Did the traveller move this frame?
@@ -62,6 +115,31 @@ pub struct TravelProgress {
     /// [`SecretLocation`].
     pub from: Vec2,
 }
+
+/// How much **world-map time** passed this frame — the budget [`travel`] moves
+/// every traveller by, so parties and the player share one clock. A `Component`
+/// on the map entity, rewritten each frame by [`tick_world_time`].
+///
+/// World time only runs while the player is travelling (or a [`WorldClockHold`]
+/// is on the map, or [`WorldMapConfig::pause_time_when_idle`] is `false`) —
+/// stop walking and the caravans freeze with you, which is what makes them
+/// catchable. [`WorldMapClock`](super::WorldMapClock) is the optional
+/// Day/HH:MM calendar layered on top of this.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct WorldMapTime {
+    /// Seconds of world time this frame — `Res<Time>` delta while advancing,
+    /// `0.0` while paused.
+    pub delta_secs: f32,
+    /// World seconds since the map loaded.
+    pub elapsed_secs: f64,
+}
+
+/// Marker the **host** puts on the map entity to keep [`WorldMapTime`] running
+/// while the player performs a non-travel timed action — resting, repairing, a
+/// radio sweep. The library never adds or removes it. Time flows at the normal
+/// rate while it's held; scale `Time<Virtual>` for a faster "rest".
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct WorldClockHold;
 
 /// The cursor's position over one map, refreshed every frame by
 /// [`track_cursor`]. A `Component` on the map entity.
@@ -156,6 +234,27 @@ pub enum WorldMapAction {
     },
     /// A previously-hidden location came into reveal range and is now shown.
     LocationDiscovered { map: Entity, location: Entity },
+    /// The player came within [`WorldMapConfig::intercept_radius_tiles`] of a
+    /// [`Party`] — edge-triggered, fires once per contact.
+    PartyIntercepted {
+        map: Entity,
+        traveler: Entity,
+        party: Entity,
+    },
+    /// The player and the [`Party`] it was in contact with have separated.
+    PartyLeft {
+        map: Entity,
+        traveler: Entity,
+        party: Entity,
+    },
+    /// The "interact" widget was clicked over an intercepted [`Party`] — the
+    /// party-side twin of [`EnterRequested`](Self::EnterRequested), and the hook
+    /// for a dialogue or event window.
+    InteractRequested {
+        map: Entity,
+        traveler: Entity,
+        party: Entity,
+    },
     /// An aside row was clicked. Accompanied by a [`TargetSet`](Self::TargetSet)
     /// sending the traveller there — the row list is an input, not just a legend.
     LocationFocused { map: Entity, location: Entity },
@@ -171,6 +270,72 @@ pub enum WorldMapAction {
 /// Project a tile-space position into world space for one grid.
 pub(crate) fn traveler_world(grid: &WorldMapGrid, tile: Vec2) -> Vec2 {
     tile_to_world(tile, grid.size_px(), grid.tile_px())
+}
+
+/// Everything a host-driven [`Party`] needs to exist on `map` at `tile`. Compose
+/// extra components on top — a faction tag, a [`TravelSpeed`], an [`AtLocation`]
+/// if you want it tracked into towns:
+///
+/// ```ignore
+/// commands.spawn((
+///     party_bundle(map, Vec2::new(1.5, 8.5), Party { name: "Caravan".into(), color }),
+///     TravelSpeed(0.8),
+///     MyFaction::Merchants,
+/// ));
+/// ```
+///
+/// It starts [`Spotted(true)`](Spotted) (put `Spotted(false)` in the same spawn
+/// to override) and with no [`TravelTarget`]; give it one to make it move.
+pub fn party_bundle(map: Entity, tile: Vec2, party: Party) -> impl Bundle {
+    (
+        party,
+        Traveler { map },
+        TilePos(tile),
+        TravelTarget::default(),
+        TravelProgress::default(),
+        Transform::default(),
+        Visibility::default(),
+        ChildOf(map),
+    )
+}
+
+/// What one slot of the "interact" widget acts on when it's clicked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InteractSubject {
+    /// Enter this location (fires [`WorldMapAction::EnterRequested`]).
+    Location(Entity),
+    /// Hail this party (fires [`WorldMapAction::InteractRequested`]).
+    Party(Entity),
+}
+
+/// Where the interact-widget squares sit over the token, in world space. Slot 0
+/// is the location under the player, slot 1 the party on top of it; whichever
+/// are present are centred as a row [`WorldMapConfig::interact_widget_offset_px`]
+/// above the token, at pitch `2·half + gap`. The one place this geometry is
+/// written — [`handle_click`]'s hit test and
+/// [`sync_interact_widgets`](super::sync_interact_widgets)'s drawing both call
+/// it, so the square you click is always the square you see.
+pub fn interact_widget_layout(
+    token_world: Vec2,
+    subjects: [Option<InteractSubject>; 2],
+    config: &WorldMapConfig,
+) -> [Option<(InteractSubject, Vec2)>; 2] {
+    let present: Vec<usize> = (0..2).filter(|&i| subjects[i].is_some()).collect();
+    let n = present.len() as f32;
+    let pitch = 2.0 * config.interact_widget_half_px + config.interact_widget_gap_px;
+    let mut out: [Option<(InteractSubject, Vec2)>; 2] = [None, None];
+    for (k, &i) in present.iter().enumerate() {
+        let x = (k as f32 - (n - 1.0) / 2.0) * pitch;
+        let center = token_world + Vec2::new(x, config.interact_widget_offset_px);
+        out[i] = Some((subjects[i].unwrap(), center));
+    }
+    out
+}
+
+/// Is `p` inside the axis-aligned square of half-extent `half` centred on
+/// `center`? The interact widget's hit test — a square, not the old disc.
+pub fn in_interact_square(center: Vec2, half: f32, p: Vec2) -> bool {
+    (p.x - center.x).abs() <= half && (p.y - center.y).abs() <= half
 }
 
 /// Refreshes every map's [`WorldMapCursor`] from the pointer and the
@@ -196,14 +361,26 @@ pub fn track_cursor(
     }
 }
 
-/// A left click either enters the place under the traveller, or sets a new
-/// travel target. Clicks landing on the aside are ignored (the repo's
-/// `Query<&Interaction>` guard).
+/// A left click either interacts with something under the player (a location to
+/// enter, an intercepted [`Party`] to hail) or sets a new travel target. Clicks
+/// landing on the aside are ignored (the repo's `Query<&Interaction>` guard).
+/// Only the [`PlayerTraveler`] is steered — a caravan is the host's to drive.
+#[allow(clippy::type_complexity)]
 pub fn handle_click(
     buttons: Res<ButtonInput<MouseButton>>,
     ui_nodes: Query<&Interaction>,
     maps: Query<(&WorldMapGrid, &WorldMapCursor, &WorldMapConfig)>,
-    mut travelers: Query<(Entity, &Traveler, &TilePos, &mut TravelTarget, &AtLocation)>,
+    mut travelers: Query<
+        (
+            Entity,
+            &Traveler,
+            &TilePos,
+            &mut TravelTarget,
+            &AtLocation,
+            &Intercepting,
+        ),
+        With<PlayerTraveler>,
+    >,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) {
@@ -213,7 +390,7 @@ pub fn handle_click(
         return;
     }
 
-    for (traveler_e, traveler, pos, mut target, at) in &mut travelers {
+    for (traveler_e, traveler, pos, mut target, at, intercepting) in &mut travelers {
         let Ok((grid, cursor, config)) = maps.get(traveler.map) else {
             continue;
         };
@@ -221,25 +398,49 @@ pub fn handle_click(
             continue;
         }
 
-        // Standing on a location: a click near the token means "enter", not
-        // "walk one tile over". The radius is deliberately smaller than half a
-        // tile so an adjacent-tile click still reads as travel.
-        if let Some(location) = at.0 {
-            let here = traveler_world(grid, pos.0);
-            if cursor.world.distance(here) <= config.enter_widget_radius_px {
-                if target.0.take().is_some() {
-                    actions.write(WorldMapAction::TargetCleared {
-                        map: traveler.map,
-                        traveler: traveler_e,
-                    });
-                }
-                actions.write(WorldMapAction::EnterRequested {
-                    map: traveler.map,
-                    traveler: traveler_e,
-                    location,
-                });
+        // A click on one of the interact-widget squares means "act on that
+        // subject", not "walk one tile over": slot 0 is the location under the
+        // token, slot 1 an intercepted party. A miss falls through to travel.
+        let here = traveler_world(grid, pos.0);
+        let subjects = [
+            at.0.map(InteractSubject::Location),
+            intercepting.0.map(InteractSubject::Party),
+        ];
+        let mut acted = false;
+        for (subject, center) in interact_widget_layout(here, subjects, config)
+            .into_iter()
+            .flatten()
+        {
+            if !in_interact_square(center, config.interact_widget_half_px, cursor.world) {
                 continue;
             }
+            if target.0.take().is_some() {
+                actions.write(WorldMapAction::TargetCleared {
+                    map: traveler.map,
+                    traveler: traveler_e,
+                });
+            }
+            match subject {
+                InteractSubject::Location(location) => {
+                    actions.write(WorldMapAction::EnterRequested {
+                        map: traveler.map,
+                        traveler: traveler_e,
+                        location,
+                    });
+                }
+                InteractSubject::Party(party) => {
+                    actions.write(WorldMapAction::InteractRequested {
+                        map: traveler.map,
+                        traveler: traveler_e,
+                        party,
+                    });
+                }
+            }
+            acted = true;
+            break;
+        }
+        if acted {
+            continue;
         }
 
         let tile = grid.clamp_tile_pos(cursor.tile);
@@ -252,10 +453,11 @@ pub fn handle_click(
     }
 }
 
-/// `Space` cancels the current target.
+/// `Space` cancels the player's current target. A caravan's trip is the host's
+/// to interrupt.
 pub fn cancel_target(
     keys: Res<ButtonInput<KeyCode>>,
-    mut travelers: Query<(Entity, &Traveler, &mut TravelTarget)>,
+    mut travelers: Query<(Entity, &Traveler, &mut TravelTarget), With<PlayerTraveler>>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
     if !keys.just_pressed(KeyCode::Space) {
@@ -271,32 +473,68 @@ pub fn cancel_target(
     }
 }
 
-/// Move each traveller toward its target by this frame's distance budget,
-/// scaled by the terrain under it. Impassable terrain stops it and clears the
-/// target.
+/// Whether [`WorldMapTime`] advances this frame: always when the world doesn't
+/// pause on idle or a [`WorldClockHold`] is set, otherwise only while the player
+/// is travelling.
+pub fn time_advancing(pause_when_idle: bool, hold: bool, player_travelling: bool) -> bool {
+    !pause_when_idle || hold || player_travelling
+}
+
+/// Rewrites each map's [`WorldMapTime`] for this frame — `Res<Time>` delta while
+/// the world is running, `0.0` while it's paused. Runs first in
+/// [`WorldMapSet::Travel`](super::WorldMapSet::Travel), before [`travel`] reads
+/// it.
+pub fn tick_world_time(
+    time: Res<Time>,
+    mut maps: Query<(
+        Entity,
+        &mut WorldMapTime,
+        &WorldMapConfig,
+        Has<WorldClockHold>,
+    )>,
+    players: Query<(&Traveler, &TravelTarget), With<PlayerTraveler>>,
+) {
+    let real_dt = time.delta_secs();
+    for (map, mut world_time, config, hold) in &mut maps {
+        let travelling = players
+            .iter()
+            .any(|(t, target)| t.map == map && target.0.is_some());
+        let advancing = time_advancing(config.pause_time_when_idle, hold, travelling);
+        world_time.delta_secs = if advancing { real_dt } else { 0.0 };
+        world_time.elapsed_secs += world_time.delta_secs as f64;
+    }
+}
+
+/// Move each traveller toward its target by this frame's [`WorldMapTime`]
+/// budget, scaled by the terrain under it. Impassable terrain stops it and
+/// clears the target. A frame where world time is paused moves nobody.
 ///
 /// Terrain is sampled once per frame at the traveller's *current* cell — good
 /// enough at travel speeds, and it means the model never needs a path.
+#[allow(clippy::type_complexity)]
 pub fn travel(
-    time: Res<Time>,
-    maps: Query<(&WorldMapGrid, &WorldMapConfig)>,
+    maps: Query<(&WorldMapGrid, &WorldMapConfig, &WorldMapTime)>,
     mut travelers: Query<(
         Entity,
         &Traveler,
         &mut TilePos,
         &mut TravelTarget,
         &mut TravelProgress,
+        Option<&TravelSpeed>,
     )>,
     mut actions: MessageWriter<WorldMapAction>,
 ) {
-    let dt = time.delta_secs();
-    for (traveler_e, traveler, mut pos, mut target, mut progress) in &mut travelers {
+    for (traveler_e, traveler, mut pos, mut target, mut progress, speed) in &mut travelers {
         *progress = TravelProgress::default();
         progress.from = pos.0;
 
-        let Ok((grid, config)) = maps.get(traveler.map) else {
+        let Ok((grid, config, world_time)) = maps.get(traveler.map) else {
             continue;
         };
+        let dt = world_time.delta_secs;
+        if dt <= 0.0 {
+            continue;
+        }
         let Some(goal) = target.0 else {
             continue;
         };
@@ -329,7 +567,8 @@ pub fn travel(
             continue;
         }
 
-        let step = (config.travel_tiles_per_sec * speed_mult * dt).min(dist);
+        let base_speed = speed.map_or(config.travel_tiles_per_sec, |s| s.0);
+        let step = (base_speed * speed_mult * dt).min(dist);
         pos.0 = grid.clamp_tile_pos(pos.0 + to_goal / dist * step);
         progress.moving = true;
         progress.tiles_this_frame = step;
@@ -351,12 +590,13 @@ pub fn point_segment_distance(a: Vec2, b: Vec2, p: Vec2) -> f32 {
     p.distance(a + ab * t)
 }
 
-/// Reveals a hidden location when a traveller's path this frame passes within
+/// Reveals a hidden location when the **player's** path this frame passes within
 /// its reveal radius — [`WorldMapConfig::reveal_radius_tiles`] for an ordinary
 /// place, the far tighter [`WorldMapConfig::secret_reveal_radius_tiles`] for a
-/// [`SecretLocation`]. Either radius being `None` disables that kind only.
+/// [`SecretLocation`]. Either radius being `None` disables that kind only. A
+/// caravan wandering past does not uncover your map.
 pub fn reveal_locations(
-    travelers: Query<(&Traveler, &TilePos, &TravelProgress)>,
+    travelers: Query<(&Traveler, &TilePos, &TravelProgress), With<PlayerTraveler>>,
     maps: Query<&WorldMapConfig>,
     mut locations: Query<(
         Entity,
@@ -439,6 +679,71 @@ pub fn track_location(
     }
 }
 
+/// Maintains the player's [`Intercepting`] — the nearest [`Party`] within
+/// [`WorldMapConfig::intercept_radius_tiles`] — firing `PartyIntercepted` /
+/// `PartyLeft` on the edges, [`track_location`]'s shape one row down.
+///
+/// The test is **swept and exact**: both tokens moved this frame, so two
+/// closing on each other could pass clean through inside one step. The gap
+/// between two points moving linearly over a frame is the distance from the
+/// origin to the segment traced by their *difference* — one call to
+/// [`point_segment_distance`], no new geometry, no tunnelling at any frame rate.
+pub fn track_intercepts(
+    mut players: Query<
+        (
+            Entity,
+            &Traveler,
+            &TilePos,
+            &TravelProgress,
+            &mut Intercepting,
+        ),
+        With<PlayerTraveler>,
+    >,
+    parties: Query<(Entity, &Traveler, &TilePos, &TravelProgress), With<Party>>,
+    maps: Query<&WorldMapConfig>,
+    mut actions: MessageWriter<WorldMapAction>,
+) {
+    for (player_e, player_t, player_pos, player_prog, mut intercepting) in &mut players {
+        let radius = maps
+            .get(player_t.map)
+            .ok()
+            .and_then(|c| c.intercept_radius_tiles);
+        let now = radius.and_then(|radius| {
+            parties
+                .iter()
+                .filter(|(_, pt, _, _)| pt.map == player_t.map)
+                .filter_map(|(party_e, _, party_pos, party_prog)| {
+                    let approach = point_segment_distance(
+                        player_prog.from - party_prog.from,
+                        player_pos.0 - party_pos.0,
+                        Vec2::ZERO,
+                    );
+                    (approach <= radius).then_some((party_e, approach))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(party_e, _)| party_e)
+        });
+        if now == intercepting.0 {
+            continue;
+        }
+        if let Some(prev) = intercepting.0 {
+            actions.write(WorldMapAction::PartyLeft {
+                map: player_t.map,
+                traveler: player_e,
+                party: prev,
+            });
+        }
+        if let Some(curr) = now {
+            actions.write(WorldMapAction::PartyIntercepted {
+                map: player_t.map,
+                traveler: player_e,
+                party: curr,
+            });
+        }
+        intercepting.0 = now;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +772,63 @@ mod tests {
         assert!((point_segment_distance(a, b, Vec2::new(-3.0, 4.0)) - 5.0).abs() < 1.0e-5);
         // Degenerate segment -> plain point distance.
         assert!((point_segment_distance(a, a, Vec2::new(3.0, 4.0)) - 5.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn relative_motion_catches_a_fast_crossing() {
+        // Two tokens swap places along x in one frame: A 0->10, B 10->0. Both
+        // end far from where they started, but they pass through each other.
+        let (a_from, a_to) = (Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0));
+        let (b_from, b_to) = (Vec2::new(10.0, 0.0), Vec2::new(0.0, 0.0));
+        let approach = point_segment_distance(a_from - b_from, a_to - b_to, Vec2::ZERO);
+        assert!(approach < 1.0e-5, "closest approach ~0, got {approach}");
+        // The naive end-point test would see 10 tiles and miss the contact.
+        assert!(a_to.distance(b_to) > 9.0);
+    }
+
+    #[test]
+    fn interact_widget_layout_centres_one_and_spreads_two() {
+        let config = WorldMapConfig::default();
+        let token = Vec2::new(100.0, 50.0);
+        let loc = InteractSubject::Location(Entity::PLACEHOLDER);
+        let party = InteractSubject::Party(Entity::PLACEHOLDER);
+
+        // One subject: dead centre over the token, offset up.
+        let one = interact_widget_layout(token, [Some(loc), None], &config);
+        assert!(one[1].is_none());
+        let (_, c) = one[0].unwrap();
+        assert!((c.x - token.x).abs() < 1.0e-5);
+        assert!((c.y - (token.y + config.interact_widget_offset_px)).abs() < 1.0e-5);
+
+        // Two subjects: symmetric about the token's x, same y, slot 0 to the left.
+        let two = interact_widget_layout(token, [Some(loc), Some(party)], &config);
+        let (s0, p0) = two[0].unwrap();
+        let (s1, p1) = two[1].unwrap();
+        assert_eq!(s0, loc);
+        assert_eq!(s1, party);
+        assert!(p0.x < p1.x);
+        assert!(((p0.x - token.x) + (p1.x - token.x)).abs() < 1.0e-5);
+        assert!((p0.y - p1.y).abs() < 1.0e-5);
+        let pitch = 2.0 * config.interact_widget_half_px + config.interact_widget_gap_px;
+        assert!(((p1.x - p0.x) - pitch).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn time_advancing_truth_table() {
+        // pause_when_idle = false -> world time always runs.
+        assert!(time_advancing(false, false, false));
+        // A held clock runs it even while idle.
+        assert!(time_advancing(true, true, false));
+        // Otherwise it follows the player.
+        assert!(time_advancing(true, false, true));
+        assert!(!time_advancing(true, false, false));
+    }
+
+    #[test]
+    fn interact_square_includes_its_corner() {
+        let c = Vec2::new(5.0, 5.0);
+        assert!(in_interact_square(c, 2.0, c));
+        assert!(in_interact_square(c, 2.0, Vec2::new(7.0, 7.0))); // corner
+        assert!(!in_interact_square(c, 2.0, Vec2::new(7.01, 5.0))); // just outside
     }
 }
