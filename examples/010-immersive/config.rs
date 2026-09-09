@@ -53,6 +53,58 @@ pub const MOUSE_SENSITIVITY: f32 = 0.07;
 /// friction). You grab crates, you don't shove them. See SPEC.md Phase 8.
 pub const PLAYER_PUSH_MASS: f32 = 0.5;
 
+// --- Movement feel ---------------------------------------------------------
+//
+// `player.rs` spawns the character with these five fields set on
+// `bevy_ahoy`'s `CharacterController`; everything else stays at the crate's
+// default (`..default()`). ahoy's defaults are Quake-derived and read as a
+// permanent sprint in a room this size — `speed` 12 m/s crosses the 33 m
+// warehouse in under 3 s, and both the ground ramp and the mid-air steering
+// are close to instantaneous. These numbers trade that for weight.
+//
+// Three ahoy knobs are deliberately left alone:
+//   * `gravity` (29.0) and `jump_height` (1.8) — the jump impulse is
+//     `sqrt(2·gravity·jump_height)` ≈ 10.22 m/s, only just over ahoy's
+//     `unground_speed` 10.0. Drop either and a jump no longer lifts you off
+//     the ground. `jump_height` is also load-bearing for the platform-B crate
+//     climb (SPEC.md Phase 8): 3.2 m of stacked crates + a 1.68 m jump.
+//   * `max_air_wish_speed` (0.76) — the Quake air-cap, ~0.5 m of drift over a
+//     0.7 s jump. That's *just* enough to land a standing hop on a 0.8 m crate
+//     beside you (which `step_size` 0.7 won't let you walk up). Lowering it
+//     would make crate-hopping harder, not safer — so the "less air control"
+//     ask is served by `AIR_ACCEL_HZ` (how fast the drift ramps in) instead.
+
+/// Ground speed the character settles at, m/s (ahoy default 12.0). HL2 run
+/// pace — the warehouse interior is ~33 m across, ~7.5 s to cross.
+pub const MOVE_SPEED: f32 = 4.5;
+
+/// `acceleration_hz` — ahoy's ground accel is Quake `PM_Accelerate`, where the
+/// per-tick gain is `speed · acceleration_hz · dt` capped by the remaining
+/// deficit. That makes **time-to-top-speed exactly `1 / acceleration_hz`
+/// seconds, independent of `MOVE_SPEED`** — this is the one responsiveness
+/// dial. 4.0 → a 0.25 s wind-up (ahoy default 8.0 → 0.125 s).
+pub const MOVE_ACCEL_HZ: f32 = 4.0;
+
+/// `friction_hz` (ahoy default 12.0). ahoy's ground friction is Quake
+/// `PM_Friction`: the decay rate is `friction_hz · μ`, and μ comes from the
+/// ground collider — our brushes carry none, so avian's `DefaultFriction` 0.5
+/// applies. 8.0 · 0.5 = 4.0/s → roughly a 1 m skid from full speed.
+pub const MOVE_FRICTION_HZ: f32 = 8.0;
+
+/// `stop_speed` (ahoy default 2.54) — the floor on the friction `control`
+/// term, i.e. below this speed you decelerate at a constant rate instead of
+/// exponentially. Scaled down with `MOVE_SPEED`: left at 2.54 it would be over
+/// half of top speed and would snap the tail off the skid.
+pub const MOVE_STOP_SPEED: f32 = 1.0;
+
+/// `air_acceleration_hz` (ahoy default 12.0). Governs how fast lateral
+/// steering authority ramps in after leaving the ground — the *amount* of
+/// air drift is capped separately by ahoy's `max_air_wish_speed` (left at
+/// 0.76). At the default the full 0.76 m/s lands on the first airborne frame,
+/// which is the "paper sheet" mid-air twitch. 1.5 spreads it over ~0.1 s so a
+/// mistimed crate hop can't be fully saved in the air.
+pub const AIR_ACCEL_HZ: f32 = 1.5;
+
 // --- Crates (carryable props) ----------------------------------------------
 //
 // Metal crates the player grabs with RMB and stacks to reach platform B (deck
@@ -521,9 +573,10 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
 /// your feet sits in the look-down ray's blind spot until you step back — a
 /// real quirk, not a bug).
 //
-// NB `movement` legs are *short*: bevy_ahoy walks at 12 m/s and the crates sit
-// ~1-3 m apart, so 0.5 s is already a full traverse. The throw comes first,
-// off the guaranteed-fresh first grab.
+// NB `movement` legs are calibrated to `MOVE_SPEED` (4.5 m/s) plus the
+// `MOVE_ACCEL_HZ` wind-up — the crates sit ~2-3 m apart, so a walk leg is
+// ~1 s, not the ~0.5 s it was at the old 12 m/s default. The throw comes
+// first, off the guaranteed-fresh first grab.
 pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
     // 0. Turn 180 deg to face the crates (they sit behind the spawn, away from
     //    the ladder walk). `yaw_rate` is deg/sec, summed by `autopilot_look`.
@@ -538,8 +591,10 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
     },
     // 1. Walk into the normal crate, looking down at it. Push-mass check:
     //    `focus` catches "Hold crate", `moving` stays 0, the crate stays put.
+    //    ~1.9 m at 4.5 m/s ≈ 0.5 s of travel; 1.6 s leaves margin for the
+    //    `MOVE_ACCEL_HZ` wind-up and holds the body against the crate.
     AutopilotStep {
-        duration: 0.9,
+        duration: 1.6,
         movement: FWD,
         yaw_rate: 0.0,
         interact: false,
@@ -589,9 +644,11 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         pitch_deg: -12.0,
     },
     // 6-7. Walk to where the thrown crate landed and settle on it (no RMB) so
-    //    `focus` locks on.
+    //    `focus` locks on. The throw carries it ~3 m; at 4.5 m/s + wind-up
+    //    that's ~1.8 s of walking (was 0.7 s at 12 m/s — tune from telemetry
+    //    if it under/overshoots).
     AutopilotStep {
-        duration: 0.7,
+        duration: 1.8,
         movement: FWD,
         yaw_rate: 0.0,
         interact: false,

@@ -79,10 +79,7 @@ pub struct LampAssets {
     indicator_on: Handle<StandardMaterial>,
 }
 
-pub fn setup_lamp_assets(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+pub fn setup_lamp_assets(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     let emissive = |color: LinearRgba, base: Color| StandardMaterial {
         base_color: base,
         emissive: color,
@@ -164,7 +161,11 @@ pub fn spawn_fixtures(
         } else {
             Cuboid::new(t, t, arm + 2.0 * embed)
         };
-        (meshes.add(mesh), arm_dir * (arm * 0.5 - embed), arm_dir * arm)
+        (
+            meshes.add(mesh),
+            arm_dir * (arm * 0.5 - embed),
+            arm_dir * arm,
+        )
     } else {
         let len = config::LAMP_STEM_LENGTH;
         let mesh = Cylinder::new(config::LAMP_STEM_RADIUS, len + 2.0 * embed);
@@ -193,8 +194,7 @@ pub fn spawn_fixtures(
             lamp.spawn((
                 Mesh3d(shade),
                 MeshMaterial3d(assets.shade.clone()),
-                Transform::from_translation(head + aim * (shade_h * 0.5))
-                    .with_rotation(shade_rot),
+                Transform::from_translation(head + aim * (shade_h * 0.5)).with_rotation(shade_rot),
             ));
             lamp.spawn((
                 LampLens,
@@ -218,8 +218,7 @@ pub fn spawn_fixtures(
                     ..default()
                 },
                 // Just past the lens so the shade cone never clips the light.
-                Transform::from_translation(head + aim * (shade_h + 0.06))
-                    .with_rotation(light_rot),
+                Transform::from_translation(head + aim * (shade_h + 0.06)).with_rotation(light_rot),
             ));
         });
 }
@@ -288,9 +287,15 @@ pub fn setup_switches(
             .to_string();
         }
         let (light_color, light_intensity) = if on {
-            (config::SWITCH_LIGHT_ON_COLOR, config::SWITCH_LIGHT_ON_INTENSITY)
+            (
+                config::SWITCH_LIGHT_ON_COLOR,
+                config::SWITCH_LIGHT_ON_INTENSITY,
+            )
         } else {
-            (config::SWITCH_LIGHT_OFF_COLOR, config::SWITCH_LIGHT_OFF_INTENSITY)
+            (
+                config::SWITCH_LIGHT_OFF_COLOR,
+                config::SWITCH_LIGHT_OFF_INTENSITY,
+            )
         };
 
         commands
@@ -396,9 +401,15 @@ pub fn sync_switch_indicators(
             }
             if let Ok(mut light) = lights.get_mut(child) {
                 (light.color, light.intensity) = if state.0 {
-                    (config::SWITCH_LIGHT_ON_COLOR, config::SWITCH_LIGHT_ON_INTENSITY)
+                    (
+                        config::SWITCH_LIGHT_ON_COLOR,
+                        config::SWITCH_LIGHT_ON_INTENSITY,
+                    )
                 } else {
-                    (config::SWITCH_LIGHT_OFF_COLOR, config::SWITCH_LIGHT_OFF_INTENSITY)
+                    (
+                        config::SWITCH_LIGHT_OFF_COLOR,
+                        config::SWITCH_LIGHT_OFF_INTENSITY,
+                    )
                 };
             }
         }

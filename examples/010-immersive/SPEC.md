@@ -62,8 +62,8 @@ Update:     ahoy camera<->CharacterLook sync
 PostUpdate: (Phase 7) ladder::turn_to_ladder — yaw ease onto the rungs, before Propagate
 ```
 
-All tuning constants (map path, TB scale, player capsule, sun illuminance, ...)
-live in `config.rs`.
+All tuning constants (map path, TB scale, player capsule, movement feel, lamp
+intensity, ...) live in `config.rs`.
 
 ## Known issues (found during Phase 1)
 
@@ -238,8 +238,9 @@ surface family beside the five original coloured ones:
 (dark grey) — see the art-pass note at the end of this file.
 
 A tall room, **1280 × 896 × 512 u** interior: two platforms at z 176–192
-(4.88 m), one in each far corner, **512 u ≈ 13 m** apart — past any ahoy jump
-(speed 12, jump_height 1.8, gravity 29 → ~8.5 m flat). A ladder brush is bolted
+(4.88 m), one in each far corner, **512 u ≈ 13 m** apart — well past any jump
+(post-retune `MOVE_SPEED` 4.5, jump_height 1.8, gravity 29 → ~3.2 m flat; even
+ahoy's stock 12 m/s only reached ~8.5 m). A ladder brush is bolted
 to platform A's edge and runs 16 u above the deck so the top rungs are
 grabbable. `player_spawn` on the floor, 7 m from the ladder, facing it.
 
@@ -618,7 +619,9 @@ metal read that actually catches the light.
 
 ### Getting onto platform B (`PropCrate::size`, added Phase 8b)
 
-Deck top z 192 u = 4.877 m. Ahoy `jump_height` 1.8, `step_size` 0.7. `PropCrate`
+Deck top z 192 u = 4.877 m. Ahoy `jump_height` 1.8, `step_size` 0.7 — both left
+untouched by the 2026-09-09 movement retune *because* this climb needs 1.68 m of
+the 1.8 (see "Movement feel — retune" below). `PropCrate`
 gained a `size` field (m, default `CRATE_SIZE` 0.8); `carry::spawn_crates` sizes
 each crate's mesh + collider from it (`CrateAssets` no longer holds a shared
 mesh). `gen_map.py` now pre-places **one 1.6 m ~800 kg crate** against platform
@@ -818,6 +821,47 @@ constants the first draft touched (`SUN_ILLUMINANCE`, `AMBIENT_BRIGHTNESS`) no
 longer exist — Phase 9 replaced them with `AMBIENT_DARK`/`AMBIENT_LIT` + the
 lamp bank. The lit-warehouse look against the darker brick is Phase 9 tuning
 territory (`AMBIENT_LIT`, `LAMP_INTENSITY`), left to a screenshot pass.
+
+## Movement feel — retune (2026-09-09)
+
+The player was spawned with `CharacterController::default()`, so it inherited
+bevy_ahoy's Quake defaults: `speed` 12 m/s, `acceleration_hz` 8 (0.125 s to top
+speed), `friction_hz` 12, `air_acceleration_hz` 12. In the 33 m warehouse that
+reads as a permanent sprint with no weight — "moves like a paper sheet", and the
+instant mid-air steering made hopping onto a 0.8 m crate a coin-flip. `player.rs`
+now sets five fields (all in `config`'s `Movement feel` block):
+
+| field | was (ahoy) | now | effect |
+|---|---|---|---|
+| `speed` | 12.0 | **4.5** | HL2 run pace, ~7.5 s to cross the room |
+| `acceleration_hz` | 8.0 | **4.0** | 0.25 s wind-up (the field *is* `1/time-to-top-speed`, independent of `speed`) |
+| `friction_hz` | 12.0 | **8.0** | ×μ 0.5 (avian `DefaultFriction`, brushes carry none) → ~1 m skid |
+| `stop_speed` | 2.54 | **1.0** | scaled with `speed` so the skid tail isn't snapped off |
+| `air_acceleration_hz` | 12.0 | **1.5** | lateral drift ramps over ~0.1 s instead of landing on frame 1 |
+
+**Three ahoy knobs were deliberately NOT touched** — a later reader will want to
+know why before "fixing" them:
+
+- **`gravity` 29.0 / `jump_height` 1.8** — jump impulse is
+  `sqrt(2·gravity·jump_height)` ≈ 10.22 m/s, barely over ahoy's `unground_speed`
+  10.0. Drop either and a jump stops lifting you off the ground.
+- **`jump_height` 1.8** again — the platform-B crate climb needs 1.68 m of it
+  (Phase 8, "Getting onto platform B").
+- **`max_air_wish_speed` 0.76** — ~0.5 m of drift over a 0.7 s jump, *just*
+  enough to land a standing hop on a 0.8 m crate beside you (`step_size` 0.7
+  won't walk you up one). Lowering it makes crate-hopping harder, not safer, so
+  the "less air control" ask was met via `air_acceleration_hz` instead.
+
+**Trap for a future tuner:** ahoy's `CharacterController::air_speed` (1.5) looks
+like the air-speed knob but is **dead code** — never read anywhere in
+bevy_ahoy 0.1. So are `min_mantle_ledge_space` and `climbdown_input_buffer`. Air
+movement is `max_air_wish_speed` + `air_acceleration_hz`, full stop.
+
+The `AUTOPILOT_SCRIPT_CRATES` walk legs were timed against 12 m/s and were
+lengthened to match (legs 1 and 6); the ladder script's opening walk had enough
+slack to survive unchanged. Whether 4.5 m/s and the skid *feel* right, and
+whether the platform-B jump (horizontal reach now ~3.2 m, was ~8.5) still lands,
+are the human-pass items.
 
 ## Environment notes
 

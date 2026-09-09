@@ -45,7 +45,9 @@ pub fn env_flag(name: &str) -> bool {
 /// energised regardless of its `start_on`, so the lit warehouse can be
 /// iterated on without first building a crate stack to reach the switch.
 pub fn force_lights_on() -> bool {
-    std::env::var("IMMERSIVE_LIGHTS").map(|v| v == "on").unwrap_or(false)
+    std::env::var("IMMERSIVE_LIGHTS")
+        .map(|v| v == "on")
+        .unwrap_or(false)
 }
 
 /// `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` straight at the wall switch

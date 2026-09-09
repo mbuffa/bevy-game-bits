@@ -16,7 +16,18 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
     commands
         .entity(player)
         .insert((
-            CharacterController::default(),
+            // Slower than ahoy's Quake-sprint default, with a visible wind-up
+            // and skid and less snap in the air. Everything unnamed stays at
+            // the crate's default. See `config`'s `Movement feel` block —
+            // including the three knobs deliberately *not* touched.
+            CharacterController {
+                speed: config::MOVE_SPEED,
+                acceleration_hz: config::MOVE_ACCEL_HZ,
+                friction_hz: config::MOVE_FRICTION_HZ,
+                stop_speed: config::MOVE_STOP_SPEED,
+                air_acceleration_hz: config::AIR_ACCEL_HZ,
+                ..default()
+            },
             Collider::cylinder(config::PLAYER_RADIUS, config::PLAYER_HEIGHT),
             // Not a weight — avian ignores a kinematic body's mass. This is
             // only the shove strength bevy_ahoy applies to dynamic props the
