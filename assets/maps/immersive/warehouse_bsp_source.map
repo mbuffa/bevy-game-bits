@@ -4,7 +4,8 @@
 // A tall warehouse (1280 x 896 x 512 u) with two raised platforms 512 u
 // apart. Platform A (west) carries a ladder to the floor; platform B (east)
 // has no ladder -- climb the pre-placed big crate at its south edge and stack
-// two loose crates on top. See SPEC.md Phases 7 and 8.
+// two loose crates on top. The room loads dark; a wall switch on platform B
+// turns the overhead lights on. See SPEC.md Phases 7, 8 and 9.
 {
 "classname" "worldspawn"
 {
@@ -160,6 +161,103 @@
 "size" "0.8"
 }
 {
+"classname" "light_fixture"
+"origin" "-448 -224 512"
+"targetname" "main_lights"
+}
+{
+"classname" "light_fixture"
+"origin" "-448 224 512"
+"targetname" "main_lights"
+}
+{
+"classname" "light_fixture"
+"origin" "0 -224 512"
+"targetname" "main_lights"
+}
+{
+"classname" "light_fixture"
+"origin" "0 224 512"
+"targetname" "main_lights"
+}
+{
+"classname" "light_fixture"
+"origin" "448 -224 512"
+"targetname" "main_lights"
+"shadows" "1"
+}
+{
+"classname" "light_fixture"
+"origin" "448 224 512"
+"targetname" "main_lights"
+}
+{
+"classname" "light_fixture"
+"origin" "-448 256 176"
+"targetname" "main_lights"
+"cone_deg" "110"
+}
+{
+"classname" "light_fixture"
+"origin" "448 256 176"
+"targetname" "main_lights"
+"cone_deg" "110"
+}
+{
+"classname" "light_fixture"
+"origin" "-336 112 118"
+"targetname" "night"
+"aim" "south"
+"intensity" "300000"
+"color" "255 210 160"
+"cone_deg" "130"
+"start_on" "1"
+}
+{
+"classname" "light_fixture"
+"origin" "-560 112 118"
+"targetname" "night"
+"aim" "south"
+"intensity" "300000"
+"color" "255 210 160"
+"cone_deg" "130"
+"start_on" "1"
+}
+{
+"classname" "light_fixture"
+"origin" "336 112 118"
+"targetname" "night"
+"aim" "south"
+"intensity" "250000"
+"color" "255 210 160"
+"cone_deg" "120"
+"start_on" "1"
+}
+{
+"classname" "light_fixture"
+"origin" "560 112 118"
+"targetname" "night"
+"aim" "south"
+"intensity" "250000"
+"color" "255 210 160"
+"cone_deg" "120"
+"start_on" "1"
+}
+{
+"classname" "func_light_switch"
+"target" "main_lights"
+"prompt" "Turn on the lights"
+"start_on" "0"
+{
+( 396 436 232 ) ( 436 448 232 ) ( 396 448 232 ) skip [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.25 0.25
+( 396 436 280 ) ( 396 448 280 ) ( 436 448 280 ) skip [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.25 0.25
+( 396 436 232 ) ( 396 448 280 ) ( 396 436 280 ) skip [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
+( 436 436 232 ) ( 436 436 280 ) ( 436 448 280 ) skip [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
+( 396 436 232 ) ( 396 436 280 ) ( 436 436 280 ) skip [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
+( 396 448 232 ) ( 436 448 280 ) ( 396 448 280 ) skip [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
+}
+}
+{
 "classname" "player_spawn"
 "origin" "-448 -256 48"
 "angle" "90"
@@ -171,6 +269,61 @@
 }
 {
 "classname" "light"
-"origin" "0 0 440"
-"light" "600"
+"origin" "-448 -224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "-448 224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "0 -224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "0 224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "448 -224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "448 224 512"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "-448 256 176"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "448 256 176"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "-336 112 118"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "-560 112 118"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "336 112 118"
+"light" "400"
+}
+{
+"classname" "light"
+"origin" "560 112 118"
+"light" "400"
 }

@@ -2,6 +2,7 @@
 //! to be read as a single reference for what a level author can place.
 
 use bevy::prelude::*;
+use bevy_trenchbroom::fgd::IntBool;
 use bevy_trenchbroom::prelude::*;
 
 /// Where the player starts. The entity spawned from the map *becomes* the
@@ -91,6 +92,64 @@ impl Default for PropCrate {
         Self {
             mass: crate::config::CRATE_MASS,
             size: crate::config::CRATE_SIZE,
+        }
+    }
+}
+
+/// A wall-mounted light switch. Aiming at it shows its prompt; E flips every
+/// [`LightFixture`] whose `targetname` matches this switch's `target`
+/// (Quake entity-IO, via bevy_trenchbroom's built-in [`Target`]/[`Targetable`]
+/// base classes — `lights.rs` does the dispatch since 0.13's IO is a
+/// data-only skeleton). Its brush is `skip`-textured (invisible); `lights.rs`
+/// draws the plate + indicator from the brush's AABB, like the ladder.
+#[solid_class(base(Interactable, Target))]
+pub struct FuncLightSwitch {
+    /// Whether this circuit is energised when the map loads.
+    pub start_on: IntBool,
+}
+impl Default for FuncLightSwitch {
+    fn default() -> Self {
+        Self {
+            start_on: IntBool(false),
+        }
+    }
+}
+
+/// A warehouse lamp — a ceiling-hung lamp (stem + cone shade + downward
+/// `SpotLight`) by default, or a raked pillar/wall bracket when `aim` names a
+/// compass direction. `lights::spawn_fixtures` builds it; a [`FuncLightSwitch`]
+/// toggles it by `targetname`. Deliberately **no** `angle`-family field (the
+/// `FuncLadder::face_yaw` trap) — `aim` is a plain string the code interprets.
+#[point_class(base(Transform, Targetable))]
+pub struct LightFixture {
+    /// `SpotLight::intensity` in lumens.
+    pub intensity: f32,
+    /// `SpotLight::range` in metres.
+    pub range: f32,
+    /// Full cone angle in degrees (split into inner/outer for a soft edge).
+    pub cone_deg: f32,
+    /// Lamp tint.
+    pub color: Color,
+    /// Whether this lamp casts real-time shadows (keep the count tiny).
+    pub shadows: IntBool,
+    /// Whether this lamp is lit when the map loads.
+    pub start_on: IntBool,
+    /// Which way the lamp points: `"down"` (default — a ceiling-hung lamp) or
+    /// a compass direction (`"north"`/`"south"`/`"east"`/`"west"` — a bracket
+    /// bolted to a pillar/wall and raked 45° down toward that heading, in
+    /// TrenchBroom's +Y-north axes).
+    pub aim: String,
+}
+impl Default for LightFixture {
+    fn default() -> Self {
+        Self {
+            intensity: crate::config::LAMP_INTENSITY,
+            range: crate::config::LAMP_RANGE,
+            cone_deg: crate::config::LAMP_CONE_DEG,
+            color: crate::config::LAMP_COLOR,
+            shadows: IntBool(crate::config::LAMP_SHADOWS),
+            start_on: IntBool(false),
+            aim: "down".to_string(),
         }
     }
 }

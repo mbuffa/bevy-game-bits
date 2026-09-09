@@ -18,9 +18,12 @@
 //!
 //! All of this is opt-in via environment variables, checked once at
 //! startup in `main.rs`, so a normal `cargo run` behaves exactly as before:
-//! - `IMMERSIVE_AUTOPILOT=1` — walk `config::AUTOPILOT_SCRIPT` automatically.
-//! - `IMMERSIVE_TELEMETRY=1` — log position/speed/grounded/focus periodically.
+//! - `IMMERSIVE_AUTOPILOT=1` / `=crates` — walk a scripted route automatically.
+//! - `IMMERSIVE_TELEMETRY=1` — log position/speed/grounded/focus/lights periodically.
 //! - `IMMERSIVE_SHOTS=1` — take in-app screenshots at scripted checkpoints.
+//! - `IMMERSIVE_LIGHTS=on` — every fixture/switch comes up energised.
+//! - `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` at the wall switch once,
+//!   ~2.5 s in (the switch is only reachable by a hand-built crate stack).
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
@@ -36,6 +39,39 @@ use crate::ladder::Climbing;
 
 pub fn env_flag(name: &str) -> bool {
     std::env::var(name).map(|v| v == "1").unwrap_or(false)
+}
+
+/// `IMMERSIVE_LIGHTS=on` — every `LightFixture` / `FuncLightSwitch` comes up
+/// energised regardless of its `start_on`, so the lit warehouse can be
+/// iterated on without first building a crate stack to reach the switch.
+pub fn force_lights_on() -> bool {
+    std::env::var("IMMERSIVE_LIGHTS").map(|v| v == "on").unwrap_or(false)
+}
+
+/// `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` straight at the wall switch
+/// once, a couple of seconds in. The switch sits where only a hand-built
+/// crate stack reaches, which no autopilot can do; the "use" raycast that
+/// finds it is the same `SpatialQuery::cast_ray` the ladder already proves,
+/// so the harness skips straight to the event and exercises the part that's
+/// new: `lights::toggle_on_interact` → `Powered` → the `sync_*` mirrors →
+/// `GlobalAmbientLight`. Read with `IMMERSIVE_TELEMETRY=1`: `lights=4/12`
+/// (the 4 always-on pillar brackets) must step to `lights=12/12 switches_on=1`
+/// exactly once and stay, and the 4 brackets are unaffected.
+pub fn auto_toggle_switch(
+    switches: Query<Entity, With<crate::lights::SwitchState>>,
+    mut commands: Commands,
+    mut frame: Local<u32>,
+    mut done: Local<bool>,
+) {
+    *frame += 1;
+    if *done || *frame < 150 {
+        return;
+    }
+    if let Ok(switch) = switches.single() {
+        info!("devtools: auto-toggling light switch {switch}");
+        commands.trigger(crate::interact::Interacted { entity: switch });
+        *done = true;
+    }
 }
 
 /// Which scripted run `IMMERSIVE_AUTOPILOT` selects: `=1` the ladder
@@ -228,6 +264,7 @@ pub fn autopilot_look(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn telemetry(
     player: Query<
         (
@@ -241,6 +278,8 @@ pub fn telemetry(
     >,
     cameras: Query<&Transform, With<CharacterControllerCameraOf>>,
     crates: Query<(&Transform, Option<&LinearVelocity>, &PropCrate), Without<Carried>>,
+    fixtures: Query<&crate::lights::Powered>,
+    switches: Query<&crate::lights::SwitchState>,
     focus: Res<InteractionFocus>,
     time: Res<Time>,
     mut since_last: Local<f32>,
@@ -253,7 +292,11 @@ pub fn telemetry(
 
     let cam = cameras.single().ok().map(|t| {
         let (y, p, _) = t.rotation.to_euler(EulerRot::YXZ);
-        (y.to_degrees(), p.to_degrees())
+        (
+            (t.translation.x, t.translation.y, t.translation.z),
+            y.to_degrees(),
+            p.to_degrees(),
+        )
     });
     // *Liftable* crates only (mass <= CARRY_MAX_MASS) — the carry subjects.
     // Skips the pre-placed heavy crates (400 kg autopilot, 800 kg base), so
@@ -272,10 +315,13 @@ pub fn telemetry(
             moving += 1;
         }
     }
+    let lamps_on = fixtures.iter().filter(|p| p.0).count();
+    let lamps_total = fixtures.iter().count();
+    let switches_on = switches.iter().filter(|s| s.0).count();
     for (transform, state, climbing, carrying, charge) in &player {
         info!(
             "telemetry: pos={:?} grounded={} climbing={} carrying={} charge={:.2} \
-             crates(n={} max_y={:.2} moving={}) focus={:?} cam_yaw_pitch={:?}",
+             crates(n={} max_y={:.2} moving={}) lights={}/{} switches_on={} focus={:?} cam_yaw_pitch={:?}",
             transform.translation,
             state.grounded.is_some(),
             climbing.is_some(),
@@ -284,6 +330,9 @@ pub fn telemetry(
             count,
             if count > 0 { max_y } else { 0.0 },
             moving,
+            lamps_on,
+            lamps_total,
+            switches_on,
             focus.0.as_ref().map(|(_, prompt)| prompt.as_str()),
             cam,
         );
@@ -297,6 +346,7 @@ pub fn telemetry(
 /// at arm's length, which telemetry can't show. One the first frame the player
 /// is standing on a platform after the climb. The last two are keyed on state,
 /// not a frame number, since the climb's duration drifts with FPS.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn take_screenshot(
     mut commands: Commands,
     player: Query<
@@ -308,11 +358,14 @@ pub fn take_screenshot(
         ),
         With<CharacterController>,
     >,
+    switches: Query<&crate::lights::SwitchState>,
     mut frame: Local<u32>,
     mut lock_view_done: Local<bool>,
     mut on_platform_done: Local<bool>,
     mut carrying_done: Local<bool>,
     mut platform_b_done: Local<bool>,
+    mut lights_dark_done: Local<bool>,
+    mut lights_lit_done: Local<bool>,
 ) {
     *frame += 1;
     if *frame == 120 {
@@ -320,6 +373,24 @@ pub fn take_screenshot(
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
                 "screenshots/010-immersive/devtools-autopilot.png",
+            ));
+    }
+    // Phase 9: the dark room (a fixed early frame) and the lit room (the first
+    // frame any switch reads on).
+    if !*lights_dark_done && *frame == 90 {
+        *lights_dark_done = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260909-warehouse-dark.png",
+            ));
+    }
+    if !*lights_lit_done && switches.iter().any(|s| s.0) {
+        *lights_lit_done = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260909-warehouse-lit.png",
             ));
     }
     let Ok((transform, state, climbing, carrying)) = player.single() else {

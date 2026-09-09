@@ -3,7 +3,9 @@
 //! camera. Also owns cursor grab/release, since that's a per-player concern.
 
 use avian3d::prelude::*;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::render::view::Hdr;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_ahoy::prelude::*;
 
@@ -26,6 +28,12 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
 
     commands.spawn((
         Camera3d::default(),
+        // The warehouse starts near-black (`lights.rs`); the switch's red
+        // indicator and the lamp lenses are HDR emissives, and bloom is what
+        // makes a 9 cm glowing square legible from across the room. `Bloom`
+        // needs an `Hdr` camera in Bevy 0.18.
+        Hdr,
+        Bloom::NATURAL,
         CharacterControllerCameraOf::new(player),
     ));
 }

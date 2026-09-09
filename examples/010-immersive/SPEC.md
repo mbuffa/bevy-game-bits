@@ -26,8 +26,8 @@ Two decisions made before any code was written:
 
 ```
 Startup:  spawn_map -> SceneRoot("maps/immersive/warehouse.map#Scene")
-          spawn_light -> DirectionalLight (see "Known issues" below)
-          + GlobalAmbientLight resource (Phase 7)
+          GlobalAmbientLight resource seeded at AMBIENT_DARK (Phase 9)
+          lights::setup_lamp_assets -> shared lamp/switch materials (Phase 9)
           bevy_trenchbroom parses brushes -> meshes + GenericMaterials
           SceneHooks per class: convex_collider (default_solid_scene_hooks)
                                  + smooth_by_default_angle
@@ -41,6 +41,10 @@ Observers:  On<Add, PlayerSpawn> -> CharacterController + Collider + camera
             (Phase 8: On<Add, PropCrate> -> carry::spawn_crates — dynamic body + collider + Mass)
             (Phase 8: On<Start<Grab>> -> carry::start_grab_or_charge — RMB grabs the aimed crate, or arms a throw)
             (Phase 8: On<Complete<Grab>> -> carry::release_prop — RMB release places (tap) or throws (held))
+            (Phase 9: On<Add, LightFixture> -> lights::spawn_fixtures — lamp mesh + downward SpotLight + Powered)
+            (Phase 9: On<SceneCollidersReady> -> lights::setup_switches — plate + indicator from the brush AABB + SwitchState)
+            (Phase 9: On<Interacted> -> lights::toggle_on_interact — flip the switch, push Powered to matching fixtures)
+Update:     (Phase 9) lights::sync_fixtures / sync_switch_indicators / sync_ambient — idempotent state mirrors
 PostUpdate: (Phase 8) carry::hold_prop — park the held crate in front of the camera, before Propagate
 PreUpdate:  bevy_enhanced_input -> ahoy AccumulatedInput
 RunFixedMainLoop:
@@ -61,7 +65,14 @@ PostUpdate: (Phase 7) ladder::turn_to_ladder — yaw ease onto the rungs, before
 All tuning constants (map path, TB scale, player capsule, sun illuminance, ...)
 live in `config.rs`.
 
-## Known issues (found during Phase 1, unresolved)
+## Known issues (found during Phase 1)
+
+**RESOLVED / no longer reproduces (2026-09-09, Phase 9).** A `SpotLight` and a
+`PointLight` at ~300 000 lm near the ceiling both render correctly on the
+current build (bevy 0.18 + current avian/ahoy/trenchbroom). The original root
+cause was never isolated; it is simply gone. Phase 9's warehouse lamps are
+real-time `SpotLight`s and `main.rs::spawn_light` (the `DirectionalLight`
+workaround) has been deleted. Original report, kept for the record:
 
 **Real-time `PointLight` in this scene blows the whole frame out to solid
 white, at any intensity.** Isolated via bisection:
@@ -379,10 +390,14 @@ through" with no log line, exactly like the sensor did.
 
 ### Lighting
 
-The warehouse is ~2.5× the bootstrap room in each axis and its dev textures are
-darker, so `SUN_ILLUMINANCE` went 3000 → 10 000 and a `GlobalAmbientLight`
-(`AMBIENT_BRIGHTNESS` 800) was added — in Bevy 0.18 `AmbientLight` is a
-per-camera component and `GlobalAmbientLight` is the resource.
+Phase 7's warehouse used `SUN_ILLUMINANCE` 10 000 + `GlobalAmbientLight`
+(`AMBIENT_BRIGHTNESS` 800), a flat unchanging look, because a `DirectionalLight`
+was the only real-time light that didn't white the frame out. **Phase 9
+replaces all of this** — see that section. There is no sun; the room is
+real-time `SpotLight` fixtures + a `GlobalAmbientLight` that
+`lights::sync_ambient` drives between `AMBIENT_DARK` (8) and `AMBIENT_LIT`
+(220). In Bevy 0.18 `AmbientLight` is a per-camera component and
+`GlobalAmbientLight` is the resource.
 
 **Verified (2026-09-08)** via the Phase 4a autopilot (synthetic keyboard input
 is still blocked on this Mac). `AUTOPILOT_SCRIPT` now presses E on approach,
@@ -645,6 +660,119 @@ does it wobble; stack 2 loose crates; jump onto the deck —
 `260909-on-platform-b.png` fires on `grounded && y > 4.5`); whether the big
 crate reads as an affordance and renders (not black); grabbing the heavy crates
 and the ladder (all rejected); and the `CRATE_*` material look.
+
+## Phase 9 — Warehouse lighting and the wall switch ✅
+
+**Goal:** the room loads near-black and gives the platform-B climb a payoff.
+Overhead warehouse lamps, wired to a light switch on platform B's north wall —
+the deck with no ladder, so the crate stack is the only way to reach it. Four
+always-on pillar brackets and the switch's red beacon are all you have; stack
+crates, cross to platform B, press E on the switch, and the warehouse comes on.
+
+New module `lights.rs`; classes `FuncLightSwitch` / `LightFixture`
+(`classes.rs`), both on bevy_trenchbroom's built-in `Target` / `Targetable`
+entity-IO base classes; `lights::*` systems wired in `main.rs`; `Hdr` + bloom
+on the camera (`player.rs`); `AMBIENT_*` / `LAMP_*` / `SWITCH_*` constants
+(`config.rs`); 12 `light_fixture` + 1 `func_light_switch` in `gen_map.py`.
+
+Follow-up (2026-09-09): `LightFixture` gained an `aim` string (`"down"` default,
+or a compass word) — `spawn_fixtures` builds a ceiling-hung lamp for `"down"`
+and a raked pillar/wall bracket otherwise, unifying the geometry through
+`Quat::from_rotation_arc` onto the aim vector. Then, from a walk-through:
+
+- **The emergency lamp is gone** (it visually overlapped a ceiling-grid lamp
+  near the spawn). Instead, an always-on `aim "south"` bracket sits on **each
+  of the four deck support pillars** (`"night"` circuit, no switch drives it) —
+  A's pair glow toward the dark spawn, B's pair light the crate-stacking
+  corner. The spawn is now deliberately dim: wake in the dark, head for the
+  pillar glow / the red switch beacon.
+- **Lamp mesh fixed.** `ConicalFrustum` has a solid bottom cap; the emissive
+  lens was coplanar just behind it → z-fight ("black ellipse with white
+  slashes"). The lens now sits *below* the cap and spans the full mouth
+  radius, and the stem/arm embeds 0.02 m into its mount surface (it was
+  floating 0.2–0.4 m short).
+- **The switch is now findable.** A fixed-size lit panel (`SWITCH_PLATE_SIZE`)
+  + a bigger indicator + a small lever + its own **red `PointLight`**
+  (`SwitchLight`, red→green with `SwitchState`, driven by
+  `sync_switch_indicators`) that pools coloured light on the wall — visible
+  across the dark room. `setup_switches` anchors the children at the brush
+  **world centre** (`center + face_push`), not a bare local offset — the
+  `func_light_switch` brush entity's own `Transform` is identity (like the
+  ladder), so a local `plate_off` alone put the panel on the map origin.
+- **Coordinate trap found here:** bevy_trenchbroom maps TB `(x, y, z)` to Bevy
+  `(-y, z, -x) / 39.37` — a 90° Y rotation off the naïve `(x, z, -y)`. The
+  `aim` compass table in `spawn_fixtures` and every hard-coded Bevy coordinate
+  (dev peeks) had to be redone against it. Verified against the real switch
+  `ColliderAabb` centre and the resting player position.
+
+### The white-out is gone
+
+The Phase 1 "Known issues" bug — a real-time `PointLight` renders the whole
+frame solid white — **no longer reproduces** on this build (bevy 0.18 + current
+avian/ahoy/trenchbroom). Verified 2026-09-09 with a throwaway spike in
+`spawn_light`: a `SpotLight` **and** a `PointLight` at ~300 000 lm near the
+ceiling both render correctly (`screenshots/010-immersive/devtools-autopilot.png`
+during the spike showed a properly lit room, not a white frame). Root cause of
+the original was never isolated; it is simply no longer present. Phase 9's
+lamps are real-time `SpotLight`s as a result — `spawn_light` (the old
+`DirectionalLight` workaround) is deleted, there is no sun, and the room is lit
+only by the fixtures + `GlobalAmbientLight`.
+
+### Design
+
+- **State is per-entity, not a resource:** `Powered(bool)` on each fixture,
+  `SwitchState(bool)` on each switch. That's what lets a level wire several
+  independent circuits (`targetname` groups) — the 4 `"night"` pillar brackets
+  are on a name no switch drives, so they stay lit and prove the group filter.
+  `toggle_on_interact` pushes the flipped `SwitchState` to every `Powered`
+  whose `Targetable::targetname` equals the switch's `Target::target`.
+- **The `sync_*` systems are idempotent every-frame mirrors** (`Powered` →
+  `SpotLight` intensity + lens material; `SwitchState` → indicator material;
+  any switch on → `GlobalAmbientLight` `AMBIENT_LIT`, else `AMBIENT_DARK`) —
+  not `OnEnter` edges. A fixture spawned mid-game has to come up right with no
+  transition to hook (the `src/inventory` `sync_window_visibility` lesson).
+- **`sync_ambient` keys off switches, not fixtures** — the always-on pillar
+  brackets would otherwise pin the ambient bright and there'd be no dark to fix.
+- **The prompt is the existing `Interactable::prompt`**, rewritten on toggle
+  ("Turn on/off the lights"). `interact::update_focus` + `ui::update_prompt`
+  render it already — no new UI.
+- **`LightFixture` has no `angle`-family field** (the `FuncLadder::face_yaw`
+  trap) — the direction is an `aim` string (`"down"` / a compass word) that
+  `spawn_fixtures` turns into a vector, and both the `SpotLight` (local −Z) and
+  the cone shade (local −Y) are rotated onto it via `Quat::from_rotation_arc`.
+- **`gen_map.py` trap:** the crate section's `39.37008` constant was named
+  `_SCALE`, which is also `box_brush`'s Valve220 "rotation xscale yscale"
+  string. Any brush built *after* that reassignment (the new switch) emitted
+  the bare float in its place and the map parser rejected it
+  (`Expected number, got '('`). Renamed to `_UPM`.
+
+### Verification (2026-09-09)
+
+`IMMERSIVE_LIGHTS=toggle` fires `Interacted` straight at the switch ~2.5 s in —
+the switch sits where only a hand-built crate stack reaches, and the raycast
+that finds it is the same `SpatialQuery::cast_ray` the ladder already proves,
+so the harness skips to the event and exercises what's new. With
+`IMMERSIVE_TELEMETRY=1` the log steps `lights=4/12 switches_on=0` →
+`lights=12/12 switches_on=1` on the single toggle and holds; the 4 always-on
+`"night"` pillar brackets are unchanged across it. `IMMERSIVE_SHOTS=1`
+captures `260909-warehouse-dark.png` (near-black; the two platform-A pillar
+brackets light the ladder foot) and `260909-warehouse-lit.png`. A throwaway
+`IMMERSIVE_PEEK` free-camera (a second `Camera3d`, higher `order`, no ahoy)
+confirmed: the pillar brackets render (arm + cone + warm lens) standing off
+the pillar and raking onto the crates; the ceiling lamps seat on the ceiling
+with no z-fight; the switch shows a lit panel + red indicator + red wall wash
+in the dark. `IMMERSIVE_LIGHTS=on` brings every fixture up
+energised for iterating on the lit look. Plain `cargo run` launches clean, no
+panics; `cargo test --lib` unaffected (61 pass).
+
+Not verified by machine (no synthetic mouse on this Mac): the raycast focus on
+the switch from a player actually standing on platform B, the red→green
+indicator swap and the prompt flip as seen in first person, and whether the lit
+room reads well enough / the dark room is navigable enough for the crate stack.
+Note the `IMMERSIVE_AUTOPILOT=1` ladder walk currently fails to climb on this
+box (the player wanders at floor level, never mounts) — but it fails identically
+on the pre-Phase-9 tree, so it's unrelated pre-existing autopilot flakiness,
+not a regression from this change.
 
 ## Environment notes
 

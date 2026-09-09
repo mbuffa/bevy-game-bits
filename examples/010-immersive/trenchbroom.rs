@@ -30,5 +30,7 @@ pub fn register_classes(app: &mut App) {
         .register_type::<classes::FuncDoor>()
         .register_type::<classes::FuncLadder>()
         .register_type::<classes::PropCrate>()
+        .register_type::<classes::FuncLightSwitch>()
+        .register_type::<classes::LightFixture>()
         .register_type::<classes::ItemPickup>();
 }

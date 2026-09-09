@@ -80,10 +80,10 @@ pub const CRATE_FRICTION: f32 = 0.95;
 pub const CRATE_LINEAR_DAMPING: f32 = 0.6;
 pub const CRATE_ANGULAR_DAMPING: f32 = 1.5;
 
-/// Crate look. The room is lit by one `DirectionalLight` + flat ambient and
-/// has **no** environment map, so a physically-correct `metallic: 1.0` crate
+/// Crate look. The room is lit by warehouse spot lamps (`lights.rs`) with
+/// **no** environment map, so a physically-correct `metallic: 1.0` crate
 /// renders nearly black (nothing for it to reflect). A low metallic with a
-/// mid roughness reads as painted sheet metal and actually catches the light.
+/// mid roughness reads as painted sheet metal and actually catches the cone.
 pub const CRATE_COLOR: Color = Color::srgb(0.42, 0.45, 0.5);
 pub const CRATE_METALLIC: f32 = 0.25;
 pub const CRATE_ROUGHNESS: f32 = 0.4;
@@ -116,17 +116,102 @@ pub const CARRY_PLACE_SECS: f32 = 0.2;
 pub const CARRY_THROW_SPEED: f32 = 12.0;
 
 // --- Lighting ------------------------------------------------------------
+//
+// Phase 9: the warehouse starts dark. There is **no** sun — the room is lit
+// only by hanging `LightFixture` lamps (`lights.rs`), and the big overhead
+// bank is off until the player finds the wall switch on platform B. The
+// Phase 1 "real-time PointLight whites the frame out" bug no longer
+// reproduces on this build (both a `PointLight` and a `SpotLight` at
+// ~300k lm render correctly — verified 2026-09-09, see SPEC.md Known issues).
 
-/// Illuminance (lux) of the directional light. See `main.rs::spawn_light` for
-/// why a directional light is used instead of the map's `light` entity. The
-/// warehouse is much bigger and its dev textures much darker than the Phase 1
-/// room, so this and `AMBIENT_BRIGHTNESS` are both well up from the old 3000.
-pub const SUN_ILLUMINANCE: f32 = 10_000.0;
+/// `GlobalAmbientLight::brightness` while the main lights are off — a
+/// near-black void. Just enough that a surface the always-on pillar brackets
+/// don't reach isn't a pure `#000` hole. `lights::sync_ambient` owns this at
+/// runtime; `main.rs` only seeds it.
+pub const AMBIENT_DARK: f32 = 8.0;
 
-/// Flat fill light so the warehouse floor and undersides of the platforms
-/// aren't pitch black. Bevy's default ambient is far too weak for a room
-/// this size.
-pub const AMBIENT_BRIGHTNESS: f32 = 800.0;
+/// `GlobalAmbientLight::brightness` once any light switch is on — a stand-in
+/// for bounce off the walls. Well under what the lamps put out so unlit
+/// corners of a lit warehouse still read as shadow.
+pub const AMBIENT_LIT: f32 = 220.0;
+
+/// Default `SpotLight::intensity` (lumens) of a warehouse lamp. Bevy's
+/// punctual falloff is `intensity / (4π·d²)` and the ceiling lamps hang ~12 m
+/// up over dark dev-grey concrete, so this is well into industrial high-bay
+/// territory — it needs to read as a real pool of light from that far.
+/// Overridden per `LightFixture` (the always-on pillar brackets are far dimmer).
+pub const LAMP_INTENSITY: f32 = 2_000_000.0;
+
+/// Default `SpotLight::range` (metres). Also caps shadow-map resolution, so
+/// it's a ceiling on how far the cone reaches, not a target.
+pub const LAMP_RANGE: f32 = 30.0;
+
+/// Default full cone angle (degrees) of a lamp's `SpotLight`. `lights.rs`
+/// splits it into inner/outer for a soft edge.
+pub const LAMP_CONE_DEG: f32 = 95.0;
+
+/// Default: do lamps cast real-time shadows? Off — `bevy_light`'s own docs
+/// say keep shadow-casters to "one or two at most", and there are eight-plus
+/// fixtures. The map turns `"shadows" "1"` on for the single lamp over the
+/// crate-stacking spot, where a cast shadow actually helps you judge a
+/// stack's height.
+pub const LAMP_SHADOWS: bool = false;
+
+/// Warm-white tint of a warehouse lamp.
+pub const LAMP_COLOR: Color = Color::srgb(1.0, 0.95, 0.86);
+
+// Lamp geometry, in metres. `"down"` lamps hang from a stem; a compass-`aim`
+// bracket swaps the stem for an arm. The glowing lens disc caps the shade's
+// mouth (its radius is `LAMP_SHADE_BOTTOM_RADIUS`); the metal shade has a
+// solid bottom cap, so the lens sits just *below* it, never inside.
+pub const LAMP_STEM_LENGTH: f32 = 0.35;
+pub const LAMP_STEM_RADIUS: f32 = 0.03;
+pub const LAMP_SHADE_TOP_RADIUS: f32 = 0.10;
+pub const LAMP_SHADE_BOTTOM_RADIUS: f32 = 0.34;
+pub const LAMP_SHADE_HEIGHT: f32 = 0.30;
+/// Length of the arm on a raked wall/pillar bracket (`LightFixture::aim` != a
+/// hanging `"down"`) — replaces the stem, laid out from the mount surface.
+/// Long enough that the shade clears the pillar it's bolted to.
+pub const LAMP_BRACKET_ARM: f32 = 0.40;
+
+/// Shade (housing) colour — dark enamelled metal.
+pub const LAMP_SHADE_COLOR: Color = Color::srgb(0.15, 0.15, 0.17);
+/// Lens colour when the lamp is off — a dead grey disc.
+pub const LAMP_LENS_OFF_COLOR: Color = Color::srgb(0.3, 0.3, 0.32);
+/// Lens emissive when the lamp is on — warm, HDR (so `Bloom` catches it) but
+/// not so hot it clips to white and loses the tint.
+pub const LAMP_LENS_EMISSIVE: LinearRgba = LinearRgba::rgb(3.0, 2.5, 1.7);
+
+// --- Light switch --------------------------------------------------------
+
+/// Wall-panel size (metres, width × height) `lights::setup_switches` draws,
+/// independent of the (invisible) brush's footprint.
+pub const SWITCH_PLATE_SIZE: Vec2 = Vec2::new(0.5, 0.7);
+/// Wall-plate colour of a `FuncLightSwitch` — brushed metal, light enough to
+/// catch its own red/green light against a dark wall.
+pub const SWITCH_PLATE_COLOR: Color = Color::srgb(0.42, 0.42, 0.46);
+/// A whisper of emissive so the panel is never a pure-black hole in
+/// `AMBIENT_DARK` even before its own light reaches it.
+pub const SWITCH_PLATE_EMISSIVE: LinearRgba = LinearRgba::rgb(0.02, 0.02, 0.03);
+/// Edge length (metres) of the square indicator light on the plate.
+pub const SWITCH_INDICATOR_SIZE: f32 = 0.14;
+/// Indicator emissive while the circuit is off — red, HDR for `Bloom` but held
+/// back from clipping to white so it stays visibly *red* at a distance.
+pub const SWITCH_OFF_EMISSIVE: LinearRgba = LinearRgba::rgb(5.0, 0.12, 0.06);
+/// Indicator emissive while the circuit is on — green.
+pub const SWITCH_ON_EMISSIVE: LinearRgba = LinearRgba::rgb(0.12, 4.5, 0.5);
+
+/// The small real `PointLight` on the switch — a close-range beacon that pools
+/// coloured light on the wall around it (red while off, green while on).
+pub const SWITCH_LIGHT_OFF_COLOR: Color = Color::srgb(1.0, 0.1, 0.05);
+pub const SWITCH_LIGHT_ON_COLOR: Color = Color::srgb(0.25, 1.0, 0.35);
+pub const SWITCH_LIGHT_OFF_INTENSITY: f32 = 6_500.0;
+pub const SWITCH_LIGHT_ON_INTENSITY: f32 = 3_000.0;
+pub const SWITCH_LIGHT_RANGE: f32 = 3.2;
+/// Interact prompt shown on the switch in each state (mutated onto the
+/// existing `Interactable::prompt` — `ui::update_prompt` renders it as-is).
+pub const SWITCH_PROMPT_OFF: &str = "Turn on the lights";
+pub const SWITCH_PROMPT_ON: &str = "Turn off the lights";
 
 // --- Interaction -----------------------------------------------------------
 

@@ -9,7 +9,8 @@
 //! on — W/S climb up/down, E or Space lets go. Aim at a crate and press RMB to
 //! carry it; RMB again to place it, or hold RMB to charge a throw (slider
 //! under the crosshair) and release to fling it. Stack crates to reach
-//! platform B.
+//! platform B, cross to the wall switch, and press E to turn the warehouse
+//! lights on (it loads near-black — head for the red indicator).
 
 mod carry;
 mod classes;
@@ -19,6 +20,7 @@ mod door;
 mod input;
 mod interact;
 mod ladder;
+mod lights;
 mod pickup;
 mod player;
 mod trenchbroom;
@@ -50,8 +52,11 @@ fn main() {
         TrenchBroomPhysicsPlugin::new(AvianPhysicsBackend),
     ))
     .add_input_context::<input::PlayerInput>()
+    // Seeds the dark state; `lights::sync_ambient` owns it from the first
+    // frame (bright once a switch is flipped, dark again when it's flipped
+    // back).
     .insert_resource(GlobalAmbientLight {
-        brightness: config::AMBIENT_BRIGHTNESS,
+        brightness: config::AMBIENT_DARK,
         ..default()
     })
     .init_resource::<interact::InteractionFocus>()
@@ -68,12 +73,15 @@ fn main() {
     .add_observer(carry::spawn_crates)
     .add_observer(carry::start_grab_or_charge)
     .add_observer(carry::release_prop)
+    .add_observer(lights::spawn_fixtures)
+    .add_observer(lights::setup_switches)
+    .add_observer(lights::toggle_on_interact)
     .add_systems(
         Startup,
         (
             spawn_map,
-            spawn_light,
             carry::setup_crate_assets,
+            lights::setup_lamp_assets,
             ui::setup_hud,
         ),
     )
@@ -85,6 +93,9 @@ fn main() {
             interact::update_focus,
             carry::advance_charge,
             door::drive_doors,
+            lights::sync_fixtures,
+            lights::sync_switch_indicators,
+            lights::sync_ambient,
             ui::update_prompt,
             ui::update_inventory,
             ui::update_charge_bar,
@@ -115,6 +126,10 @@ fn main() {
             .after(AhoySystems::MoveCharacters)
             .before(PhysicsSystems::First),
     );
+
+    if std::env::var("IMMERSIVE_LIGHTS").as_deref() == Ok("toggle") {
+        app.add_systems(Update, devtools::auto_toggle_switch);
+    }
 
     if let Some(script) = devtools::autopilot_script() {
         // In PreUpdate, after bevy samples the keyboard/mouse and before
@@ -150,22 +165,5 @@ fn main() {
 fn spawn_map(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(SceneRoot(
         asset_server.load(format!("{}#Scene", config::MAP_PATH)),
-    ));
-}
-
-/// A directional (sun-style) light rather than the map's own `light` point
-/// entity: a real-time `PointLight` in this room, at any intensity, blows
-/// the whole frame out to solid white (confirmed intensity-independent —
-/// 300,000 and 40,000 lm both white, 0 lights renders correctly, and
-/// swapping to a `DirectionalLight` renders correctly at the same position).
-/// Root cause not yet isolated; see SPEC.md risks. Revisit before Phase 5/6.
-fn spawn_light(mut commands: Commands) {
-    commands.spawn((
-        DirectionalLight {
-            illuminance: config::SUN_ILLUMINANCE,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::default().looking_at(Vec3::new(-0.3, -1.0, -0.5), Vec3::Y),
     ));
 }

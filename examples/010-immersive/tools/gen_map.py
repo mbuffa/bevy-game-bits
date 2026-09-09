@@ -19,11 +19,13 @@ Output
 ------
 Two files, from one box list:
 
-    assets/maps/immersive/warehouse.map             -- no `light` entity; the
-        example lights the room with a DirectionalLight in main.rs (a live
-        point light triggers the Phase 1 white-out on the dynamic-load path).
-    assets/maps/immersive/warehouse_bsp_source.map  -- adds `light` and
-        `info_player_start` for the ericw-tools compile (`make bsp`).
+    assets/maps/immersive/warehouse.map             -- the runtime map. No
+        Quake `light` entity, but a bank of `light_fixture` point entities
+        (real-time SpotLights, built by lights.rs) and one `func_light_switch`
+        (Phase 9). The main bank loads *off*.
+    assets/maps/immersive/warehouse_bsp_source.map  -- adds a Quake `light`
+        at each fixture origin and an `info_player_start` for the ericw-tools
+        compile (`make bsp`). Not the default; not verified unless built.
 
 Run from anywhere:  python3 examples/010-immersive/tools/gen_map.py
 Deterministic: re-running produces byte-identical files.
@@ -37,6 +39,13 @@ Deck B has no ladder -- the player reaches it by climbing `prop_crate` props
 (carry.rs, Phase 8): a big fixed 1.6 m crate is pre-placed against its south
 edge, and 3 loose 0.8 m crates sit nearby to stack on top. Two more crates on
 the spawn line drive the autopilot.
+
+Lighting (Phase 9): 6 ceiling + 2 aisle `light_fixture` lamps on the
+"main_lights" circuit, off at load; 4 always-on "night" bracket lamps, one on
+each deck support pillar (the dark spawn + the crate-stacking corner would be
+unworkable otherwise); a `func_light_switch` on deck B's north wall (z 256,
+hand height) — with its own red PointLight beacon — that the crate stack is the
+only way to reach.
 """
 
 import os
@@ -156,12 +165,16 @@ LADDER_BRUSH = box_brush((-472, 24, 0), (-424, 64, 208), LADDER_TEX)
 #
 # `size` is the cube edge in metres (`config::CRATE_SIZE` default 0.8); origin
 # is the cube centre, so z = size/2 * scale rests it on the floor (top z 0).
-_SCALE = 39.37008  # TB units per metre (== config::TB_SCALE)
+# TB units per metre (== config::TB_SCALE). NB: deliberately *not* `_SCALE` —
+# that name belongs to `box_brush`'s Valve220 "rotation xscale yscale" string,
+# and any brush built after this line (the light switch) would emit this float
+# in its place and break the parser.
+_UPM = 39.37008
 
 
 def _crate(x, y, mass=25, size=0.8, prompt="Hold crate"):
     return {"classname": "prop_crate",
-            "origin": "%d %d %d" % (x, y, round(size * _SCALE / 2)),
+            "origin": "%d %d %d" % (x, y, round(size * _UPM / 2)),
             "prompt": prompt, "mass": str(mass), "size": str(size)}
 
 
@@ -181,11 +194,88 @@ STACKING_CRATES = [
     _crate(536, -20),   # east of the base
 ]
 
+# --- lighting (Phase 9) --------------------------------------------------
+#
+# The warehouse loads dark: `GlobalAmbientLight` at `config::AMBIENT_DARK`, no
+# sun, the overhead `light_fixture` bank *off*. A single `func_light_switch`
+# on platform B's north wall (reached by the crate stack — B has no ladder)
+# turns the "main_lights" circuit on. Four bracket lamps — one on each platform
+# support pillar — are on `targetname "night"`, which no switch drives, so they
+# stay lit: the always-on aid for the dark spawn + the crate-stacking corner,
+# and the proof the group filter works.
+#
+# `light_fixture` is a point class (classes.rs): origin is the lamp's mount
+# point (a ceiling/deck-underside/pillar surface — `lights.rs` embeds the
+# connector 0.02 m into it), `targetname` its circuit, `aim` ("down" default,
+# or a compass word for a raked wall/pillar bracket), and every SpotLight knob
+# (intensity, range, cone_deg, color, shadows) defaults from `config::LAMP_*`.
+
+
+def _lamp(x, y, z, targetname, **over):
+    d = {"classname": "light_fixture", "origin": "%d %d %d" % (x, y, z),
+         "targetname": targetname}
+    for k, v in over.items():
+        d[k] = str(v)
+    return d
+
+
+# Ceiling bank: 3 x 2 grid seated on the 512 u ceiling. The y +224 row lights
+# the two decks, the y -224 row the open south floor. One lamp — over the
+# crate-stacking spot at platform B's foot — casts shadows, so a growing stack
+# reads as a growing shadow; the rest don't (keep the shadow-map count tiny).
+CEILING_LAMPS = [
+    _lamp(x, y, 512, "main_lights",
+          **({"shadows": 1} if (x, y) == (448, -224) else {}))
+    for x in (-448, 0, 448)
+    for y in (-224, 224)
+]
+
+# Aisle lamps seated on the deck underside (z 176) so the space beneath the
+# platforms isn't a black hole.
+AISLE_LAMPS = [
+    _lamp(-448, 256, 176, "main_lights", cone_deg=110),
+    _lamp(448, 256, 176, "main_lights", cone_deg=110),
+]
+
+# Pillar night lights: a bracket on the south face (y 112) of each of the four
+# deck support pillars (TB x -352..-320 / -576..-544 for platform A, 320-352 /
+# 544-576 for B), ~3 u up, raked south (`aim`). Platform A's pair (brighter,
+# wider) throw a glow toward the spawn 9 m south; B's pair light the
+# crate-stacking corner. `targetname "night"` — no switch drives it, so they
+# stay lit through the toggle.
+PILLAR_NIGHT_LAMPS = [
+    _lamp(-336, 112, 118, "night", aim="south", intensity=300000,
+          color="255 210 160", cone_deg=130, start_on=1),   # platform A
+    _lamp(-560, 112, 118, "night", aim="south", intensity=300000,
+          color="255 210 160", cone_deg=130, start_on=1),
+    _lamp(336, 112, 118, "night", aim="south", intensity=250000,
+          color="255 210 160", cone_deg=120, start_on=1),    # platform B
+    _lamp(560, 112, 118, "night", aim="south", intensity=250000,
+          color="255 210 160", cone_deg=120, start_on=1),
+]
+
+LAMPS = CEILING_LAMPS + AISLE_LAMPS + PILLAR_NIGHT_LAMPS
+
+# The wall switch. A 40 x 12 x 48 u `skip` box standing 12 u proud of platform
+# B's north wall (inner face y 448), centred at z 256 — 1.6 m above the deck
+# top (z 192), hand height. `skip` is invisible but still yields a collider
+# (the aim target); lights.rs draws a fixed-size lit panel + red PointLight
+# from the AABB (the func_ladder precedent).
+SWITCH_BRUSH = box_brush((396, 436, 232), (436, 448, 280), "skip")
+SWITCH_ENTITY = {"classname": "func_light_switch", "target": "main_lights",
+                 "prompt": "Turn on the lights", "start_on": "0"}
+
 PLAYER_SPAWN = {"classname": "player_spawn", "origin": "-448 -256 48", "angle": "90"}
 # NB: no "angle" key — bevy_trenchbroom would read it as a brush rotation and
 # throw the ladder across the room. `face_yaw` is plain data ladder.rs reads.
 LADDER_ENTITY = {"classname": "func_ladder", "face_yaw": "90", "prompt": "Climb ladder"}
-LIGHT = {"classname": "light", "origin": "0 0 440", "light": "600"}
+# For the .bsp compile only: a matching Quake `light` at each lamp's origin so
+# the baked path agrees with the dynamic one. Not verified unless `make bsp`
+# is run — the default example loads warehouse.map.
+BSP_LIGHTS = [
+    {"classname": "light", "origin": lamp["origin"], "light": "400"}
+    for lamp in LAMPS
+]
 # qbsp's leak-fill occupant; classname is literal. Our player_spawn coexists.
 INFO_PLAYER_START = {"classname": "info_player_start", "origin": "-448 -256 48", "angle": "90"}
 
@@ -196,7 +286,8 @@ HEADER = """\
 // A tall warehouse (1280 x 896 x 512 u) with two raised platforms 512 u
 // apart. Platform A (west) carries a ladder to the floor; platform B (east)
 // has no ladder -- climb the pre-placed big crate at its south edge and stack
-// two loose crates on top. See SPEC.md Phases 7 and 8.
+// two loose crates on top. The room loads dark; a wall switch on platform B
+// turns the overhead lights on. See SPEC.md Phases 7, 8 and 9.
 """
 
 
@@ -222,10 +313,14 @@ def build(with_light):
     parts.append(_entity(LADDER_ENTITY, LADDER_BRUSH))
     for crate in AUTOPILOT_CRATES + [BIG_CRATE] + STACKING_CRATES:
         parts.append(_entity(crate))
+    for lamp in LAMPS:
+        parts.append(_entity(lamp))
+    parts.append(_entity(SWITCH_ENTITY, SWITCH_BRUSH))
     parts.append(_entity(PLAYER_SPAWN))
     if with_light:
         parts.append(_entity(INFO_PLAYER_START))
-        parts.append(_entity(LIGHT))
+        for light in BSP_LIGHTS:
+            parts.append(_entity(light))
     return "\n".join(parts) + "\n"
 
 
