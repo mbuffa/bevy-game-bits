@@ -33,6 +33,10 @@ Geometry (TrenchBroom units, +Z up, +Y north; 39.37008 u/m)
 Interior 1280 x 896 x 512 u (32.5 x 22.8 x 13.0 m). Two decks at z 176..192
 (4.88 m); a 512 u (13.0 m) gap between them -- past any jump. Ladder on deck
 A's south face, running 16 u above the deck so the top rungs are grabbable.
+Deck B has no ladder -- the player reaches it by climbing `prop_crate` props
+(carry.rs, Phase 8): a big fixed 1.6 m crate is pre-placed against its south
+edge, and 3 loose 0.8 m crates sit nearby to stack on top. Two more crates on
+the spawn line drive the autopilot.
 """
 
 import os
@@ -135,6 +139,48 @@ WORLDSPAWN = [
 # ~4 u), sized in ladder.rs, not on this brush.
 LADDER_BRUSH = box_brush((-472, 24, 0), (-424, 64, 208), LADDER_TEX)
 
+# --- crates ---------------------------------------------------------------
+#
+# Carryable metal props (`prop_crate`, see classes.rs / carry.rs). Three groups:
+#
+#  * AUTOPILOT_CRATES -- on the line *behind* the spawn (away from the ladder),
+#    so `IMMERSIVE_AUTOPILOT=crates` reaches them by turning 180 deg and walking
+#    forward, and the `IMMERSIVE_AUTOPILOT=1` ladder walk (which heads the other
+#    way) never touches them. One normal, one over-`CARRY_MAX_MASS`.
+#  * BIG_CRATE -- a 1.6 m ~800 kg crate against platform B's south edge. Too
+#    heavy to lift (so it's a fixed step) and, at ~1/3 the deck height, an
+#    affordance that says "climb here".
+#  * STACKING_CRATES -- 3 loose 0.8 m crates beside it. Hop onto the big crate,
+#    stack 2 of these on top (1.6 + 0.8 + 0.8 = 3.2 m), jump onto platform B
+#    (deck top 4.88 m, jump 1.8 m -> 5.0 m). The 3rd is a spare.
+#
+# `size` is the cube edge in metres (`config::CRATE_SIZE` default 0.8); origin
+# is the cube centre, so z = size/2 * scale rests it on the floor (top z 0).
+_SCALE = 39.37008  # TB units per metre (== config::TB_SCALE)
+
+
+def _crate(x, y, mass=25, size=0.8, prompt="Hold crate"):
+    return {"classname": "prop_crate",
+            "origin": "%d %d %d" % (x, y, round(size * _SCALE / 2)),
+            "prompt": prompt, "mass": str(mass), "size": str(size)}
+
+
+# Player spawns at y -256 facing +Y (the ladder). These sit the *other* way,
+# toward the south wall (y -448), clear of the ladder walk.
+AUTOPILOT_CRATES = [
+    _crate(-448, -330),                                  # normal: grab / place / throw
+    _crate(-448, -390, mass=400, prompt="Crate (too heavy)"),  # weight gate
+]
+
+# Between platform B's support columns (x 320-352, 544-576); north face ~y 61,
+# ~3 u off the deck's south edge (y 64).
+BIG_CRATE = _crate(448, 30, mass=800, size=1.6, prompt="Heavy crate")
+STACKING_CRATES = [
+    _crate(360, -20),   # west of the base
+    _crate(448, -90),   # south
+    _crate(536, -20),   # east of the base
+]
+
 PLAYER_SPAWN = {"classname": "player_spawn", "origin": "-448 -256 48", "angle": "90"}
 # NB: no "angle" key — bevy_trenchbroom would read it as a brush rotation and
 # throw the ladder across the room. `face_yaw` is plain data ladder.rs reads.
@@ -149,8 +195,8 @@ HEADER = """\
 //
 // A tall warehouse (1280 x 896 x 512 u) with two raised platforms 512 u
 // apart. Platform A (west) carries a ladder to the floor; platform B (east)
-// is reachable only by climbing A and... there is no bridge yet -- the gap
-// is the point. See SPEC.md Phase 7.
+// has no ladder -- climb the pre-placed big crate at its south edge and stack
+// two loose crates on top. See SPEC.md Phases 7 and 8.
 """
 
 
@@ -174,6 +220,8 @@ def build(with_light):
     parts.append("\n".join(world_props))
 
     parts.append(_entity(LADDER_ENTITY, LADDER_BRUSH))
+    for crate in AUTOPILOT_CRATES + [BIG_CRATE] + STACKING_CRATES:
+        parts.append(_entity(crate))
     parts.append(_entity(PLAYER_SPAWN))
     if with_light:
         parts.append(_entity(INFO_PLAYER_START))

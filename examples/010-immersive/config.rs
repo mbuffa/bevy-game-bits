@@ -40,6 +40,81 @@ pub const PLAYER_HEIGHT: f32 = 1.8;
 /// Mouse-look sensitivity: degrees of yaw/pitch per pixel of mouse motion.
 pub const MOUSE_SENSITIVITY: f32 = 0.07;
 
+/// The player's `avian3d` `Mass`, in kg — but read the caveat. `bevy_ahoy`
+/// requires `RigidBody::Kinematic` on the character, and avian's solver
+/// **ignores a kinematic body's mass entirely**. The *only* thing that reads
+/// this number is `bevy_ahoy`'s `dynamics::apply_forces`, which shoves every
+/// dynamic body the player touches with `impulse = mass * approach_speed`. So
+/// in this example the constant is purely "how hard I can push a crate", not a
+/// weight — a literal 70 here would launch a 25 kg crate at ~2.8x walking
+/// speed and make a stack impossible to walk past. Set *below* the per-step
+/// friction impulse of a resting crate so walking into the pile can't budge
+/// it at all (the crates carry their real mass, `CRATE_MASS`, and high
+/// friction). You grab crates, you don't shove them. See SPEC.md Phase 8.
+pub const PLAYER_PUSH_MASS: f32 = 0.5;
+
+// --- Crates (carryable props) ----------------------------------------------
+//
+// Metal crates the player grabs with RMB and stacks to reach platform B (deck
+// top 4.88 m). The map pre-places one big ~800 kg crate (1.6 m, too heavy to
+// lift) against the deck's south edge; the player hops onto it and stacks two
+// loose 0.8 m crates on top (1.6 + 0.8 + 0.8 = 3.2 m, + a 1.8 m jump clears the
+// deck). `PropCrate::size` / `mass` are per-entity; these are the defaults.
+// See SPEC.md Phase 8.
+
+/// Default edge length (meters) of a crate cube.
+pub const CRATE_SIZE: f32 = 0.8;
+
+/// Default crate `Mass` (kg). A level author overrides it per-entity via the
+/// `mass` field to make one crate too heavy to lift (a fixed step).
+pub const CRATE_MASS: f32 = 25.0;
+
+/// Friction coefficient for crates — high, and applied with a `Max` combine
+/// rule (`carry::spawn_crates`) so the crate-vs-floor friction is this value
+/// regardless of the floor brush's own. Keeps a stack from sliding apart and
+/// keeps the pile put when the player walks through it.
+pub const CRATE_FRICTION: f32 = 0.95;
+
+/// Linear/angular damping bled off a crate every step, so a bump becomes a
+/// short lurch that settles instead of a long glide or spin.
+pub const CRATE_LINEAR_DAMPING: f32 = 0.6;
+pub const CRATE_ANGULAR_DAMPING: f32 = 1.5;
+
+/// Crate look. The room is lit by one `DirectionalLight` + flat ambient and
+/// has **no** environment map, so a physically-correct `metallic: 1.0` crate
+/// renders nearly black (nothing for it to reflect). A low metallic with a
+/// mid roughness reads as painted sheet metal and actually catches the light.
+pub const CRATE_COLOR: Color = Color::srgb(0.42, 0.45, 0.5);
+pub const CRATE_METALLIC: f32 = 0.25;
+pub const CRATE_ROUGHNESS: f32 = 0.4;
+
+// --- Carrying -------------------------------------------------------------
+
+/// Heaviest `Mass` (kg) RMB will lift. Between `CRATE_MASS` and the "too
+/// heavy" crates so the weight gate is demonstrable. Static brushes (ladders,
+/// walls) and kinematic bodies (doors) are excluded by body *type* before
+/// mass is ever consulted.
+pub const CARRY_MAX_MASS: f32 = 40.0;
+
+/// How far (meters) in front of the camera a held crate floats, and how far
+/// below the view centre. Also the max distance the drop/throw shape-cast
+/// probes for clear space.
+pub const CARRY_DISTANCE: f32 = 1.25;
+pub const CARRY_DROP: f32 = 0.4;
+
+/// Alpha a held crate is drawn at (ghost preview).
+pub const CARRY_ALPHA: f32 = 0.5;
+
+/// Seconds of held RMB for a fully-charged throw.
+pub const CARRY_CHARGE_SECS: f32 = 1.5;
+
+/// RMB held shorter than this counts as a *place* (drop straight down, no
+/// launch speed) rather than a weak throw — so stacking is precise.
+pub const CARRY_PLACE_SECS: f32 = 0.2;
+
+/// Launch speed (m/s) of a fully-charged throw; scaled by the charge ratio.
+pub const CARRY_THROW_SPEED: f32 = 12.0;
+
 // --- Lighting ------------------------------------------------------------
 
 /// Illuminance (lux) of the directional light. See `main.rs::spawn_light` for
@@ -151,6 +226,15 @@ pub struct AutopilotStep {
     pub yaw_rate: f32,
     pub interact: bool,
     pub jump: bool,
+    /// Hold the real RMB (`MouseButton::Right`) down for the whole leg, like
+    /// `jump` holds `Space` — so a leg's `duration` *is* the throw-charge
+    /// time. A run of `grab` legs is one continuous hold.
+    pub grab: bool,
+    /// Absolute camera pitch (degrees, negative = look down) held for the leg.
+    /// The crate script needs this: a crate is 0.8 m tall and sits on the
+    /// floor, so an eye-level ray sails over it — you look down to aim at one.
+    /// The ladder script leaves it 0.
+    pub pitch_deg: f32,
 }
 
 /// How long (seconds) the autopilot holds a tapped `E` "use" press. Long enough
@@ -203,6 +287,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Grab #1 — already parked in front of the rungs with `focus` resolved, so
     // one E press on this leg's first frame mounts. `climbing` must be false
@@ -215,6 +301,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: true,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Press E on the rungs: toggle off. `climbing` -> false, gravity drops the
     // body...
@@ -224,6 +312,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: true,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // ...straight down to the floor (`grounded` true, `y` ~0.9) at the mount —
     // the camera is still facing the rungs, so no re-approach is needed.
@@ -233,6 +323,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Jump straight up from the mount: press Space (the `Start<Jump>` edge) and
     // hold it. STILL, so the body rises and falls on the spot, staying in the
@@ -243,6 +335,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: true,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Grab #2 — still airborne, Space still held (so `jumped` is live,
     // elapsed-0). One E tap, fired the frame the raycast focuses the ladder.
@@ -257,6 +351,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: true,
         jump: true,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Climb partway (Space released now). From the grab-#2 height (`y` ~1.4) at
     // ~2.2 m/s this reaches `y` ~4 — well short of the ladder top (`y` ~6.18).
@@ -266,6 +362,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Let go mid-climb. The stop-when-released check: `y` must be *constant*
     // across every telemetry sample of this leg with `climbing` still true.
@@ -277,6 +375,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Resume: the climb restarts from where it hung, reaches the top and the
     // top-of-range rule steps onto platform A (`grounded`, `y` ~5.8). Pre-fix
@@ -287,6 +387,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
     // Hold on the platform.
     AutopilotStep {
@@ -295,6 +397,170 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
+        grab: false,
+        pitch_deg: 0.0,
+    },
+];
+
+/// The keyboard-free crate check, selected by `IMMERSIVE_AUTOPILOT=crates`.
+/// The map puts a normal crate and a deliberately over-mass crate on the line
+/// *behind* the spawn (clear of the ladder walk); the script turns 180° first,
+/// then drives with pure forward/back movement (no yaw). It *does* pitch the
+/// view down — a floor crate is below an eye-level ray — via
+/// `AutopilotStep::pitch_deg`. `grab` holds the real RMB for the whole leg
+/// (like `jump` holds Space), so a `grab` leg's `duration` is the throw charge
+/// and a run of `grab` legs is one press.
+///
+/// `crates(n=)` in telemetry counts only *liftable* crates (mass <=
+/// `CARRY_MAX_MASS`) — 4 at rest here: the autopilot's normal crate + the 3
+/// stacking crates by platform B. The heavy crates (400 kg, 800 kg) don't
+/// count.
+///
+/// Legs and their binary signals (read from `IMMERSIVE_TELEMETRY`):
+///  1. walk into the crate, no RMB — `crates(moving)` stays 0 and its position
+///     barely changes: `PLAYER_PUSH_MASS` is below a resting crate's friction
+///     impulse, so the pile doesn't budge.
+///  2-3. RMB on the (now focused) crate — `carrying` goes true (n -> 3) and
+///     *stays* true across the release (`release_prop` no-ops without a
+///     `ThrowCharge`).
+///  4-5. RMB down and HELD past `CARRY_CHARGE_SECS` (`charge` climbs, caps at
+///     1.5), then release — a full throw: n back to 4, `crates(moving)` -> 1,
+///     the crate arcs several metres.
+///  6-9. walk to where it landed, RMB grab, RMB tap (< `CARRY_PLACE_SECS`) —
+///     a place: `carrying` -> false, the crate drops straight down and settles.
+///
+/// The weight gate (RMB on the 400 kg crate leaves `carrying` false) and the
+/// ladder reject share the one `matches!(.. RigidBody::Dynamic .. mass <=
+/// CARRY_MAX_MASS)` in `start_grab_or_charge`; both are left to the human pass
+/// (the immovable crate blocks the autopilot's aisle, and a crate placed at
+/// your feet sits in the look-down ray's blind spot until you step back — a
+/// real quirk, not a bug).
+//
+// NB `movement` legs are *short*: bevy_ahoy walks at 12 m/s and the crates sit
+// ~1-3 m apart, so 0.5 s is already a full traverse. The throw comes first,
+// off the guaranteed-fresh first grab.
+pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
+    // 0. Turn 180 deg to face the crates (they sit behind the spawn, away from
+    //    the ladder walk). `yaw_rate` is deg/sec, summed by `autopilot_look`.
+    AutopilotStep {
+        duration: 1.0,
+        movement: STILL,
+        yaw_rate: 180.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -20.0,
+    },
+    // 1. Walk into the normal crate, looking down at it. Push-mass check:
+    //    `focus` catches "Hold crate", `moving` stays 0, the crate stays put.
+    AutopilotStep {
+        duration: 0.9,
+        movement: FWD,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -45.0,
+    },
+    // 2-3. Grab (RMB press then release). `carrying` -> true (n 3), stays true
+    //    past the release.
+    AutopilotStep {
+        duration: 0.5,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: true,
+        pitch_deg: -45.0,
+    },
+    AutopilotStep {
+        duration: 0.5,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -18.0,
+    },
+    // 4-5. Arm + fully charge a throw (RMB held past `CARRY_CHARGE_SECS`), then
+    //    release: a hard throw. `charge` climbs to 1.5, then n -> 4,
+    //    `moving` -> 1, the crate arcs several metres.
+    AutopilotStep {
+        duration: 2.0,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: true,
+        pitch_deg: -12.0,
+    },
+    AutopilotStep {
+        duration: 1.4,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -12.0,
+    },
+    // 6-7. Walk to where the thrown crate landed and settle on it (no RMB) so
+    //    `focus` locks on.
+    AutopilotStep {
+        duration: 0.7,
+        movement: FWD,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -40.0,
+    },
+    AutopilotStep {
+        duration: 0.8,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -45.0,
+    },
+    // 8-9. Grab it (press/release), then TAP RMB (< `CARRY_PLACE_SECS`): a
+    //    place. `carrying` briefly true then false; the crate drops straight
+    //    down and settles (`moving` -> 0).
+    AutopilotStep {
+        duration: 0.6,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: true,
+        pitch_deg: -45.0,
+    },
+    AutopilotStep {
+        duration: 0.5,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -18.0,
+    },
+    AutopilotStep {
+        duration: 0.15,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: true,
+        pitch_deg: -18.0,
+    },
+    AutopilotStep {
+        duration: 2.5,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: -18.0,
     },
 ];
 

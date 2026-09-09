@@ -16,6 +16,10 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
         .insert((
             CharacterController::default(),
             Collider::cylinder(config::PLAYER_RADIUS, config::PLAYER_HEIGHT),
+            // Not a weight — avian ignores a kinematic body's mass. This is
+            // only the shove strength bevy_ahoy applies to dynamic props the
+            // player walks into. See `config::PLAYER_PUSH_MASS`.
+            Mass(config::PLAYER_PUSH_MASS),
             Name::new("Player"),
         ))
         .insert(input::player_input_bundle());

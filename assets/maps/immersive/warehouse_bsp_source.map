@@ -3,8 +3,8 @@
 //
 // A tall warehouse (1280 x 896 x 512 u) with two raised platforms 512 u
 // apart. Platform A (west) carries a ladder to the floor; platform B (east)
-// is reachable only by climbing A and... there is no bridge yet -- the gap
-// is the point. See SPEC.md Phase 7.
+// has no ladder -- climb the pre-placed big crate at its south edge and stack
+// two loose crates on top. See SPEC.md Phases 7 and 8.
 {
 "classname" "worldspawn"
 {
@@ -116,6 +116,48 @@
 ( -472 24 0 ) ( -472 24 208 ) ( -424 24 208 ) skip [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
 ( -472 64 0 ) ( -424 64 208 ) ( -472 64 208 ) skip [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.25 0.25
 }
+}
+{
+"classname" "prop_crate"
+"origin" "-448 -330 16"
+"prompt" "Hold crate"
+"mass" "25"
+"size" "0.8"
+}
+{
+"classname" "prop_crate"
+"origin" "-448 -390 16"
+"prompt" "Crate (too heavy)"
+"mass" "400"
+"size" "0.8"
+}
+{
+"classname" "prop_crate"
+"origin" "448 30 31"
+"prompt" "Heavy crate"
+"mass" "800"
+"size" "1.6"
+}
+{
+"classname" "prop_crate"
+"origin" "360 -20 16"
+"prompt" "Hold crate"
+"mass" "25"
+"size" "0.8"
+}
+{
+"classname" "prop_crate"
+"origin" "448 -90 16"
+"prompt" "Hold crate"
+"mass" "25"
+"size" "0.8"
+}
+{
+"classname" "prop_crate"
+"origin" "536 -20 16"
+"prompt" "Hold crate"
+"mass" "25"
+"size" "0.8"
 }
 {
 "classname" "player_spawn"

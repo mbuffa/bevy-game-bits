@@ -4,10 +4,14 @@
 //! via bevy_trenchbroom; see SPEC.md for the phased build-out and why Q1/Q2
 //! BSP was chosen over Quake 3.
 //!
-//! Controls: WASD move, mouse look, Space jump, Ctrl crouch, click to grab
-//! the cursor, Escape to release it. Aim at a ladder and press E to lock on —
-//! W/S climb up/down, E or Space lets go.
+//! Controls: WASD move, mouse look, Space jump, Ctrl crouch, left-click to
+//! grab the cursor, Escape to release it. Aim at a ladder and press E to lock
+//! on — W/S climb up/down, E or Space lets go. Aim at a crate and press RMB to
+//! carry it; RMB again to place it, or hold RMB to charge a throw (slider
+//! under the crosshair) and release to fling it. Stack crates to reach
+//! platform B.
 
+mod carry;
 mod classes;
 mod config;
 mod devtools;
@@ -61,23 +65,36 @@ fn main() {
     .add_observer(ladder::setup_ladders)
     .add_observer(ladder::attach_on_interact)
     .add_observer(ladder::let_go_on_jump)
-    .add_systems(Startup, (spawn_map, spawn_light, ui::setup_hud))
+    .add_observer(carry::spawn_crates)
+    .add_observer(carry::start_grab_or_charge)
+    .add_observer(carry::release_prop)
+    .add_systems(
+        Startup,
+        (
+            spawn_map,
+            spawn_light,
+            carry::setup_crate_assets,
+            ui::setup_hud,
+        ),
+    )
     .add_systems(
         Update,
         (
             player::capture_cursor.run_if(input_just_pressed(MouseButton::Left)),
             player::release_cursor.run_if(input_just_pressed(KeyCode::Escape)),
             interact::update_focus,
+            carry::advance_charge,
             door::drive_doors,
             ui::update_prompt,
             ui::update_inventory,
+            ui::update_charge_bar,
         ),
     )
     // The yaw ease after an E-grab runs here, not in Update, so ahoy's
     // Update-schedule camera sync can't clobber it. See `ladder.rs`.
     .add_systems(
         PostUpdate,
-        ladder::turn_to_ladder.before(TransformSystems::Propagate),
+        (ladder::turn_to_ladder, carry::hold_prop).before(TransformSystems::Propagate),
     )
     // Ladder climbing brackets bevy_ahoy's controller: read intent before it
     // runs, overwrite the result after. See `ladder.rs`.
@@ -99,16 +116,24 @@ fn main() {
             .before(PhysicsSystems::First),
     );
 
-    if devtools::env_flag("IMMERSIVE_AUTOPILOT") {
-        // In PreUpdate, after bevy samples the keyboard and before
-        // bevy_enhanced_input reads it, so the autopilot's held `KeyE` is
-        // seen the same frame. See `devtools::autopilot_drive`.
-        app.add_systems(
-            PreUpdate,
-            devtools::autopilot_drive
-                .after(bevy::input::InputSystems)
-                .before(EnhancedInputSystems::Update),
-        );
+    if let Some(script) = devtools::autopilot_script() {
+        // In PreUpdate, after bevy samples the keyboard/mouse and before
+        // bevy_enhanced_input reads it, so the autopilot's held `KeyE` /
+        // `MouseButton::Right` are seen the same frame. See
+        // `devtools::autopilot_drive`. `IMMERSIVE_AUTOPILOT=1` runs the ladder
+        // walk, `=crates` the crate grab/place/throw walk.
+        app.insert_resource(script)
+            .init_resource::<devtools::AutopilotAim>()
+            .add_systems(
+                PreUpdate,
+                devtools::autopilot_drive
+                    .after(bevy::input::InputSystems)
+                    .before(EnhancedInputSystems::Update),
+            )
+            .add_systems(
+                PostUpdate,
+                devtools::autopilot_look.before(TransformSystems::Propagate),
+            );
     }
     if devtools::env_flag("IMMERSIVE_TELEMETRY") {
         app.add_systems(Update, devtools::telemetry);

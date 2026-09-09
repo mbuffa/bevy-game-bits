@@ -22,6 +22,11 @@ pub struct PlayerInput;
 #[action_output(bool)]
 pub struct Interact;
 
+/// RMB: grab / carry / throw a `PropCrate`, consumed by `carry.rs`.
+#[derive(Debug, InputAction)]
+#[action_output(bool)]
+pub struct Grab;
+
 /// `PlayerInput` plus every action binding, inserted onto the player entity
 /// when it spawns. Movement/camera bindings mirror bevy_ahoy's own
 /// `minimal.rs` example; `Interact` is appended for our own use-raycast.
@@ -66,6 +71,16 @@ pub fn player_input_bundle() -> impl Bundle {
                 // that by being idempotent.
                 Press::default(),
                 bindings![KeyCode::KeyE, GamepadButton::West],
+            ),
+            (
+                // Deliberately *unconditioned*, unlike `Interact`. `carry.rs`
+                // never reads `Fire<Grab>`: it grabs/charges on the `Start<Grab>`
+                // press edge and places/throws on the `Complete<Grab>` release,
+                // with the hold duration in between as the throw charge. A
+                // `Press` here would collapse the hold and swallow the release.
+                // Same `Start`/`Complete` pair as ahoy's unconditioned `Jump`.
+                Action::<Grab>::new(),
+                bindings![MouseButton::Right, GamepadButton::RightTrigger2],
             ),
         ]),
     )

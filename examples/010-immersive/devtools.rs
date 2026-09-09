@@ -22,17 +22,49 @@
 //! - `IMMERSIVE_TELEMETRY=1` — log position/speed/grounded/focus periodically.
 //! - `IMMERSIVE_SHOTS=1` — take in-app screenshots at scripted checkpoints.
 
+use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 use bevy::render::view::window::screenshot::{save_to_disk, Screenshot};
 use bevy_ahoy::input::AccumulatedInput;
 use bevy_ahoy::prelude::*;
 
+use crate::carry::{Carried, Carrying, ThrowCharge};
+use crate::classes::PropCrate;
 use crate::config::{self, AutopilotStep};
 use crate::interact::InteractionFocus;
 use crate::ladder::Climbing;
 
 pub fn env_flag(name: &str) -> bool {
     std::env::var(name).map(|v| v == "1").unwrap_or(false)
+}
+
+/// Which scripted run `IMMERSIVE_AUTOPILOT` selects: `=1` the ladder
+/// regression walk (`config::AUTOPILOT_SCRIPT`), `=crates` the crate
+/// grab/place/throw/weight-gate walk (`config::AUTOPILOT_SCRIPT_CRATES`).
+#[derive(Resource, Clone, Copy)]
+pub struct AutopilotScript(pub &'static [AutopilotStep]);
+
+/// The absolute view orientation (radians) the current leg wants. Written by
+/// `autopilot_drive` in `PreUpdate`, applied to the camera by `autopilot_look`
+/// in `PostUpdate` — after ahoy's `copy_camera_to_character_look` (which runs
+/// in `RunFixedMainLoop`, *before* `Update`) would otherwise clobber anything
+/// written into `CharacterLook`, and after a crate bump has nudged the body.
+/// Forcing it late and absolutely is the only stable way. Same "write the
+/// camera late" trick as `ladder::turn_to_ladder`.
+#[derive(Resource, Default)]
+pub struct AutopilotAim {
+    /// Yaw to add to the camera's current facing this frame (`yaw_rate * dt`).
+    pub yaw_delta: f32,
+    /// Absolute pitch (radians) to hold the view at.
+    pub pitch: f32,
+}
+
+pub fn autopilot_script() -> Option<AutopilotScript> {
+    match std::env::var("IMMERSIVE_AUTOPILOT").ok().as_deref() {
+        Some("1") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT)),
+        Some("crates") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT_CRATES)),
+        _ => None,
+    }
 }
 
 /// One human-length key press per script leg. Once `start` is true on a leg,
@@ -72,28 +104,29 @@ impl Tap {
     }
 }
 
-/// Drives the player through `config::AUTOPILOT_SCRIPT` on a loop: writes
+/// Drives the player through the selected `AutopilotScript` on a loop: writes
 /// `AccumulatedInput.last_movement` (same field ahoy's own WASD observer
-/// writes), rotates the camera's `Transform` directly (ahoy copies camera
-/// rotation into `CharacterLook`, which steers movement, every
-/// `RunFixedMainLoop`), taps the real `KeyCode::KeyE` on `interact` legs, and
-/// *holds* the real `KeyCode::Space` for the whole of any `jump` leg (so a run
-/// of consecutive `jump` legs is one continuous hold — a jump pressed well
-/// before the leg that grabs the ladder, which is the reported gesture). Runs
-/// in `PreUpdate`, after `bevy::input::InputSystems` and before
-/// `EnhancedInputSystems::Update`, so the key writes are seen by
-/// bevy_enhanced_input the same frame.
+/// writes), hands the view orientation to `autopilot_look` via `AutopilotAim`,
+/// taps the real `KeyCode::KeyE` on `interact` legs, and *holds* the real
+/// `KeyCode::Space` / `MouseButton::Right` for the whole of any `jump` / `grab`
+/// leg (so a run of such legs is one continuous hold — Space pressed well
+/// before a ladder grab, RMB held to charge a throw). Runs in `PreUpdate`,
+/// after `bevy::input::InputSystems` and before `EnhancedInputSystems::Update`,
+/// so the key/mouse writes are seen by bevy_enhanced_input the same frame.
 pub fn autopilot_drive(
+    script: Res<AutopilotScript>,
     mut inputs: Query<&mut AccumulatedInput, With<CharacterController>>,
-    mut cameras: Query<&mut Transform, With<CharacterControllerCamera>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut aim: ResMut<AutopilotAim>,
     focus: Res<InteractionFocus>,
     time: Res<Time>,
     mut step_idx: Local<usize>,
     mut step_elapsed: Local<f32>,
     mut use_tap: Local<Tap>,
 ) {
-    if config::AUTOPILOT_SCRIPT.is_empty() || inputs.is_empty() {
+    let steps = script.0;
+    if steps.is_empty() || inputs.is_empty() {
         // Don't start (or advance) the script until the player exists — the
         // scene loads asynchronously, and letting the clock run during the load
         // would make which leg is "current" when the player appears depend on
@@ -102,18 +135,24 @@ pub fn autopilot_drive(
         return;
     }
 
+    // Walk the script once and then hold on the last leg (both scripts end on
+    // a STILL leg). Not a loop — a second pass would start from a world the
+    // first pass rearranged (a thrown crate underfoot), making the telemetry
+    // impossible to read.
     *step_elapsed += time.delta_secs();
-    let mut step = &config::AUTOPILOT_SCRIPT[*step_idx % config::AUTOPILOT_SCRIPT.len()];
-    if *step_elapsed >= step.duration {
+    let mut step = &steps[(*step_idx).min(steps.len() - 1)];
+    if *step_elapsed >= step.duration && *step_idx < steps.len() - 1 {
         *step_elapsed = 0.0;
         *step_idx += 1;
-        step = &config::AUTOPILOT_SCRIPT[*step_idx % config::AUTOPILOT_SCRIPT.len()];
+        step = &steps[*step_idx];
     }
     let AutopilotStep {
         movement,
         yaw_rate,
         interact,
         jump,
+        grab,
+        pitch_deg,
         ..
     } = *step;
     let dt = time.delta_secs();
@@ -128,11 +167,15 @@ pub fn autopilot_drive(
             input.last_movement = Some(movement);
         }
     }
-    for mut transform in &mut cameras {
-        let (mut yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-        yaw += yaw_rate.to_radians() * dt;
-        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-    }
+    // Hand the view orientation to `autopilot_look` (PostUpdate): it keeps the
+    // camera's own yaw, adds this leg's `yaw_rate` and forces the pitch. Both
+    // scripts here leave `yaw_rate` 0 and rely on the spawn facing, so in
+    // practice this only ever sets the pitch — needed because a floor crate is
+    // below an eye-level ray. Writing `CharacterLook` from here is pointless:
+    // ahoy's `copy_camera_to_character_look` overwrites it from the camera in
+    // `RunFixedMainLoop`, before `Update` applies it and before the KCC runs.
+    aim.yaw_delta = yaw_rate.to_radians() * dt;
+    aim.pitch = pitch_deg.to_radians();
 
     // Press the real keys, not the actions: this puts the whole binding →
     // `Press` → `fire_interact` (E) and binding → ahoy `Jump` / `Start<Jump>`
@@ -160,14 +203,44 @@ pub fn autopilot_drive(
     } else {
         keys.release(KeyCode::Space);
     }
+
+    // RMB is *held* for the whole of a `grab` leg, like Space — so a leg's
+    // duration is the throw charge, and a run of `grab` legs is one continuous
+    // press (grab, then keep holding to charge). Exercises the real
+    // binding → `Start<Grab>` / `Complete<Grab>` path in `carry.rs`.
+    if grab {
+        mouse.press(MouseButton::Right);
+    } else {
+        mouse.release(MouseButton::Right);
+    }
+}
+
+/// Apply the current leg's pitch to the camera, after ahoy's own camera sync.
+/// `PostUpdate`, before transform propagation — the `ladder::turn_to_ladder`
+/// slot and reasoning.
+pub fn autopilot_look(
+    aim: Res<AutopilotAim>,
+    mut cameras: Query<&mut Transform, With<CharacterControllerCameraOf>>,
+) {
+    for mut transform in &mut cameras {
+        let (yaw, _, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw + aim.yaw_delta, aim.pitch, 0.0);
+    }
 }
 
 pub fn telemetry(
     player: Query<
-        (&Transform, &CharacterControllerState, Option<&Climbing>),
+        (
+            &Transform,
+            &CharacterControllerState,
+            Option<&Climbing>,
+            Option<&Carrying>,
+            Option<&ThrowCharge>,
+        ),
         With<CharacterController>,
     >,
     cameras: Query<&Transform, With<CharacterControllerCameraOf>>,
+    crates: Query<(&Transform, Option<&LinearVelocity>, &PropCrate), Without<Carried>>,
     focus: Res<InteractionFocus>,
     time: Res<Time>,
     mut since_last: Local<f32>,
@@ -182,12 +255,35 @@ pub fn telemetry(
         let (y, p, _) = t.rotation.to_euler(EulerRot::YXZ);
         (y.to_degrees(), p.to_degrees())
     });
-    for (transform, state, climbing) in &player {
+    // *Liftable* crates only (mass <= CARRY_MAX_MASS) — the carry subjects.
+    // Skips the pre-placed heavy crates (400 kg autopilot, 800 kg base), so
+    // `max_y`/`moving` mean something: a walked-into crate stays at 0 moving,
+    // a thrown one shows as 1, a stack lifts `max_y`.
+    let mut count = 0;
+    let mut max_y = f32::MIN;
+    let mut moving = 0;
+    for (transform, vel, prop) in &crates {
+        if prop.mass > config::CARRY_MAX_MASS {
+            continue;
+        }
+        count += 1;
+        max_y = max_y.max(transform.translation.y);
+        if vel.is_some_and(|v| v.0.length() > 0.15) {
+            moving += 1;
+        }
+    }
+    for (transform, state, climbing, carrying, charge) in &player {
         info!(
-            "telemetry: pos={:?} grounded={} climbing={} focus={:?} cam_yaw_pitch={:?}",
+            "telemetry: pos={:?} grounded={} climbing={} carrying={} charge={:.2} \
+             crates(n={} max_y={:.2} moving={}) focus={:?} cam_yaw_pitch={:?}",
             transform.translation,
             state.grounded.is_some(),
             climbing.is_some(),
+            carrying.is_some(),
+            charge.map_or(0.0, |c| c.0),
+            count,
+            if count > 0 { max_y } else { 0.0 },
+            moving,
             focus.0.as_ref().map(|(_, prompt)| prompt.as_str()),
             cam,
         );
@@ -204,12 +300,19 @@ pub fn telemetry(
 pub fn take_screenshot(
     mut commands: Commands,
     player: Query<
-        (&Transform, &CharacterControllerState, Option<&Climbing>),
+        (
+            &Transform,
+            &CharacterControllerState,
+            Option<&Climbing>,
+            Option<&Carrying>,
+        ),
         With<CharacterController>,
     >,
     mut frame: Local<u32>,
     mut lock_view_done: Local<bool>,
     mut on_platform_done: Local<bool>,
+    mut carrying_done: Local<bool>,
+    mut platform_b_done: Local<bool>,
 ) {
     *frame += 1;
     if *frame == 120 {
@@ -219,7 +322,7 @@ pub fn take_screenshot(
                 "screenshots/010-immersive/devtools-autopilot.png",
             ));
     }
-    let Ok((transform, state, climbing)) = player.single() else {
+    let Ok((transform, state, climbing, carrying)) = player.single() else {
         return;
     };
     if !*lock_view_done && climbing.is_some() && transform.translation.y > 2.5 {
@@ -236,6 +339,24 @@ pub fn take_screenshot(
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
                 "screenshots/010-immersive/260908-on-platform-a.png",
+            ));
+    }
+    // Phase 8: the ghost crate at arm's length + charge slider.
+    if !*carrying_done && carrying.is_some() {
+        *carrying_done = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260909-carrying-crate.png",
+            ));
+    }
+    // Phase 8: standing on platform B (deck top 4.88 m) after a crate stack.
+    if !*platform_b_done && state.grounded.is_some() && transform.translation.y > 4.5 {
+        *platform_b_done = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260909-on-platform-b.png",
             ));
     }
 }

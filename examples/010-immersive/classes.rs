@@ -70,6 +70,31 @@ impl Default for FuncLadder {
     }
 }
 
+/// A carryable metal crate. `carry::spawn_crates` gives it a dynamic body, a
+/// cuboid collider and its painted-metal look; `carry.rs` handles the RMB
+/// grab/carry/throw. `mass` (kg) is both the crate's real physics mass **and**
+/// the grab gate: RMB lifts a crate only at or under `config::CARRY_MAX_MASS`,
+/// so a level author makes one an immovable step just by giving it a big
+/// number (the crate under platform B is ~800 kg). `size` sets the cube edge —
+/// the same base crate is bigger than the loose ones you stack on it. Static
+/// brushes (ladders, walls) and kinematic bodies (doors) can't be grabbed at
+/// all — wrong `RigidBody` type, checked before mass.
+#[point_class(base(Transform, Interactable))]
+pub struct PropCrate {
+    /// Physical mass in kilograms. Also the lift gate (see the type doc).
+    pub mass: f32,
+    /// Cube edge length in meters. Defaults to `config::CRATE_SIZE` (0.8 m).
+    pub size: f32,
+}
+impl Default for PropCrate {
+    fn default() -> Self {
+        Self {
+            mass: crate::config::CRATE_MASS,
+            size: crate::config::CRATE_SIZE,
+        }
+    }
+}
+
 /// A collectable. `pickup::spawn_visuals` gives it a placeholder emissive-cube
 /// mesh + sensor collider; swap for a glTF model later via the `model(...)`
 /// class attribute.

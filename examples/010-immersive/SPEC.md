@@ -3,8 +3,9 @@
 **Status:** Phases 1-3, 4a, and 5 done and verified (2026-07-28) on the
 hand-authored bootstrap map. **Phase 7 — ladder climbing — done and verified
 (2026-09-08)** on a new generated warehouse map that replaced the bootstrap one.
-Phase 4b (TrenchBroom authoring) remains and needs a human at the TrenchBroom
-GUI — see "Environment notes" at the bottom.
+**Phase 8 — carryable crates — done and verified (2026-09-09)** via the
+`IMMERSIVE_AUTOPILOT=crates` walk. Phase 4b (TrenchBroom authoring) remains and
+needs a human at the TrenchBroom GUI — see "Environment notes" at the bottom.
 
 ## Context
 
@@ -37,6 +38,10 @@ Observers:  On<Add, PlayerSpawn> -> CharacterController + Collider + camera
                       + ladder mesh child carrying its own solid Collider)
             (Phase 7: On<Interacted> -> ladder::attach_on_interact — E mounts, or toggles off)
             (Phase 7: On<Start<Jump>> -> ladder::let_go_on_jump — a Space press while climbing detaches)
+            (Phase 8: On<Add, PropCrate> -> carry::spawn_crates — dynamic body + collider + Mass)
+            (Phase 8: On<Start<Grab>> -> carry::start_grab_or_charge — RMB grabs the aimed crate, or arms a throw)
+            (Phase 8: On<Complete<Grab>> -> carry::release_prop — RMB release places (tap) or throws (held))
+PostUpdate: (Phase 8) carry::hold_prop — park the held crate in front of the camera, before Propagate
 PreUpdate:  bevy_enhanced_input -> ahoy AccumulatedInput
 RunFixedMainLoop:
    BeforeFixedMainLoop: (Phase 7) ladder::stash_input — once per frame:
@@ -526,6 +531,120 @@ while a key is held, no coast or lurch on release, both directions; releasing W
 right at the top (the crest step still auto-completes by design — it should read
 as a dismount, not a slide); releasing S at the very bottom (you should hang at
 the lowest rung, and pressing S again finishes the step down).
+
+## Phase 8 — Carryable crates ✅
+
+**Goal:** heavy metal crates the player grabs with RMB and stacks to reach
+**platform B** (which has no ladder — "the gap is the point"). Grab a crate with
+RMB; it floats half-opacity in front of the view with its collider off. RMB
+again to drop it: a tap *places* it straight down (precise, for stacking), a
+hold charges a throw (a slider under the crosshair fills) and the release flings
+it. Walking into the pile must not shift it. (Phase 8b: the map pre-places one
+big fixed crate at platform B's edge so the climb is 2 placements, not 8 — see
+"Getting onto platform B" below.)
+
+New module `carry.rs`, class `PropCrate` (`classes.rs`), action `Grab`
+(`input.rs`), plus a `Mass` on the player and a HUD slider (`ui.rs`).
+
+### `PLAYER_PUSH_MASS` is a shove dial, not a weight
+
+`bevy_ahoy` requires `RigidBody::Kinematic` on the character and avian's solver
+**ignores a kinematic body's mass entirely**. The *only* reader of the player's
+`Mass` is ahoy's `dynamics::apply_forces`, which shoves every dynamic body the
+player touches with `impulse = mass * approach_speed`. So the constant is "how
+hard I push a prop", nothing else — a literal 70 kg would launch a 25 kg crate
+at ~2.8x walking speed and make the pile impossible to walk past. It's set to
+**0.5** — below a resting crate's per-step friction impulse — so walking into
+the pile genuinely can't budge it (verified: the crate moves < 1 mm). Crates
+carry their real `Mass` (`CRATE_MASS` 25, or a per-entity `mass` field; the
+example map has one at 400) with a high `Friction` combined `Max` so a stack
+doesn't slide itself apart. You grab crates, you don't push them.
+
+### The held crate loses its `RigidBody`, not gains `RigidBodyDisabled`
+
+avian's `position_to_transform` filter is `Or<(With<RigidBody>,
+With<ApplyPosToTransform>)>`, so removing the component means avian provably
+never writes the held crate's `Transform` and can't fight `hold_prop`. The
+one-way `transform_to_position` still runs, keeping `Position` glued to the
+carry pose, so on release the body resumes exactly where it hangs. `ChildOf`
+goes too (local `Transform` becomes world space; the `SceneRoot` is identity so
+no visible jump). `ColliderDisabled` is required, not cosmetic — otherwise the
+crate at arm's length is what `interact::update_focus`'s raycast hits.
+`hold_prop` writes the crate `Transform` in `PostUpdate` before `Propagate` —
+the `ladder::turn_to_ladder` slot: the camera is a root entity so its
+`Transform` is this frame's world pose there.
+
+### The grab gate
+
+`matches!(bodies.get(target), Ok((RigidBody::Dynamic, m)) if m.value() <=
+CARRY_MAX_MASS)` — one rule. Ladder brushes are `RigidBody::Static` and doors
+`Kinematic`, so both are rejected by body *type* before mass is read; that's
+"you can't grab a ladder" for free. Shared with the "use" ray via
+`interact::InteractionFocus`, so range and aim match E.
+
+### `Grab` is unconditioned; place vs throw is `Start`/`Complete`
+
+Unlike `Interact` (which needs `Press` or its `Fire` toggles a ladder every
+frame), `Grab` has no condition. `carry.rs` grabs/charges on the `Start<Grab>`
+press edge and places/throws on the `Complete<Grab>` release, with the hold
+duration between as the throw charge — the same `Start`/`Complete` pair ahoy's
+unconditioned `Jump` uses. A short hold (< `CARRY_PLACE_SECS`) is a place with
+zero launch speed; past that the throw speed scales linearly to
+`CARRY_THROW_SPEED` at `CARRY_CHARGE_SECS`.
+
+### Metallic-under-directional-light gotcha
+
+The room has one `DirectionalLight` + flat ambient and **no** environment map,
+so a physically-correct `metallic: 1.0` crate renders near-black (nothing to
+reflect). `CRATE_METALLIC` 0.25 / `CRATE_ROUGHNESS` 0.4 is the painted-sheet-
+metal read that actually catches the light.
+
+### Getting onto platform B (`PropCrate::size`, added Phase 8b)
+
+Deck top z 192 u = 4.877 m. Ahoy `jump_height` 1.8, `step_size` 0.7. `PropCrate`
+gained a `size` field (m, default `CRATE_SIZE` 0.8); `carry::spawn_crates` sizes
+each crate's mesh + collider from it (`CrateAssets` no longer holds a shared
+mesh). `gen_map.py` now pre-places **one 1.6 m ~800 kg crate** against platform
+B's south edge — too heavy to lift (mass ≫ `CARRY_MAX_MASS`), so it's a fixed
+step and, at a third of the deck height, a visible "climb here" affordance — and
+**3 loose 0.8 m crates** beside it (the old 4×3 grid is gone). Procedure: hop
+onto the big crate, stack 2 loose crates on top (1.6 + 0.8 + 0.8 = 3.2 m), jump
+onto the deck (3.2 + 1.8 = 5.0 m). Two placements. The 800 kg crate stays a
+heavy `Dynamic` body — same as the 400 kg autopilot crate, rock-solid under
+`PLAYER_PUSH_MASS` 0.5. Two more 0.8 m crates on the spawn line drive the
+autopilot.
+
+### Verification
+
+`IMMERSIVE_AUTOPILOT=crates` (a new `AutopilotStep::grab` holds RMB, `pitch_deg`
+looks the view down at a floor crate, and `yaw_rate` now actually turns —
+`autopilot_look` in `PostUpdate` forces the camera because ahoy's
+`copy_camera_to_character_look` clobbers anything written into `CharacterLook`
+before the KCC runs). The autopilot crates sit *behind* the spawn (the ladder
+walk heads the other way and never touches them); the script turns 180° first.
+With `IMMERSIVE_TELEMETRY=1` the log confirms, in one pass (`crates(n=)` counts
+only *liftable* crates now — 4 at rest: the autopilot's normal crate + the 3
+stacking crates): walking into the autopilot crate keeps `crates(moving) 0` and
+its position fixed (push gate); RMB grabs it (`carrying` true, n → 3) and it
+stays carried past the press release; a 2 s RMB hold charges to 1.5 then the
+release throws it (n → 4, the crate arcs to y ~1.2, `moving` → 1, travels
+several metres); a re-grab + tapped RMB places it and it settles. Stacking is
+also seen when the placed crate comes to rest on the thrown one (y ~1.2). The
+weight gate (RMB on the 400 kg / 800 kg crates) and ladder reject are the same
+`matches!` and are left to the human pass. `IMMERSIVE_SHOTS=1` adds a
+ghost-crate shot. The `IMMERSIVE_AUTOPILOT=1` ladder walk is unchanged and
+still crests platform A.
+
+Left for a human (no synthetic mouse — the autopilot presses the real
+`MouseButton::Right`, but aiming precisely and *feeling* the charge are
+manual): the half-opacity crate's distance/height (`CARRY_DISTANCE` /
+`CARRY_DROP` — it reads a touch large and close); the charge slider and
+`CARRY_CHARGE_SECS`; whether a full throw over/undershoots
+(`CARRY_THROW_SPEED`); the actual climb onto platform B (hop the big crate,
+does it wobble; stack 2 loose crates; jump onto the deck —
+`260909-on-platform-b.png` fires on `grounded && y > 4.5`); whether the big
+crate reads as an affordance and renders (not black); grabbing the heavy crates
+and the ladder (all rejected); and the `CRATE_*` material look.
 
 ## Environment notes
 
