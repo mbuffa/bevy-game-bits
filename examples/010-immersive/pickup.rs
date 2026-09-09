@@ -21,7 +21,11 @@ pub fn spawn_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let mesh = meshes.add(Cuboid::new(config::PICKUP_SIZE, config::PICKUP_SIZE, config::PICKUP_SIZE));
+    let mesh = meshes.add(Cuboid::new(
+        config::PICKUP_SIZE,
+        config::PICKUP_SIZE,
+        config::PICKUP_SIZE,
+    ));
     let material = materials.add(StandardMaterial {
         base_color: config::PICKUP_COLOR,
         emissive: config::PICKUP_EMISSIVE,
@@ -32,7 +36,11 @@ pub fn spawn_visuals(
         Mesh3d(mesh),
         MeshMaterial3d(material),
         RigidBody::Static,
-        Collider::cuboid(config::PICKUP_SIZE, config::PICKUP_SIZE, config::PICKUP_SIZE),
+        Collider::cuboid(
+            config::PICKUP_SIZE,
+            config::PICKUP_SIZE,
+            config::PICKUP_SIZE,
+        ),
         Sensor,
     ));
 }

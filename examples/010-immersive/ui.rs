@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use crate::interact::InteractionFocus;
+use crate::ladder::Climbing;
 use crate::pickup::Inventory;
 
 #[derive(Component)]
@@ -50,13 +51,29 @@ pub fn setup_hud(mut commands: Commands) {
     ));
 }
 
-pub fn update_prompt(focus: Res<InteractionFocus>, mut prompts: Query<&mut Text, With<PromptText>>) {
+pub fn update_prompt(
+    focus: Res<InteractionFocus>,
+    climbing: Query<(), With<Climbing>>,
+    mut prompts: Query<&mut Text, With<PromptText>>,
+) {
+    let label = if !climbing.is_empty() {
+        "W/S to climb · E or Space to let go".to_string()
+    } else {
+        focus
+            .0
+            .as_ref()
+            .map(|(_, prompt)| prompt.clone())
+            .unwrap_or_default()
+    };
     for mut text in &mut prompts {
-        text.0 = focus.0.as_ref().map(|(_, prompt)| prompt.clone()).unwrap_or_default();
+        text.0 = label.clone();
     }
 }
 
-pub fn update_inventory(inventory: Res<Inventory>, mut texts: Query<&mut Text, With<InventoryText>>) {
+pub fn update_inventory(
+    inventory: Res<Inventory>,
+    mut texts: Query<&mut Text, With<InventoryText>>,
+) {
     if !inventory.is_changed() {
         return;
     }

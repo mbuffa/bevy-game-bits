@@ -5,7 +5,8 @@
 //! BSP was chosen over Quake 3.
 //!
 //! Controls: WASD move, mouse look, Space jump, Ctrl crouch, click to grab
-//! the cursor, Escape to release it.
+//! the cursor, Escape to release it. Aim at a ladder and press E to lock on —
+//! W/S climb up/down, E or Space lets go.
 
 mod classes;
 mod config;
@@ -13,6 +14,7 @@ mod devtools;
 mod door;
 mod input;
 mod interact;
+mod ladder;
 mod pickup;
 mod player;
 mod trenchbroom;
@@ -44,6 +46,10 @@ fn main() {
         TrenchBroomPhysicsPlugin::new(AvianPhysicsBackend),
     ))
     .add_input_context::<input::PlayerInput>()
+    .insert_resource(GlobalAmbientLight {
+        brightness: config::AMBIENT_BRIGHTNESS,
+        ..default()
+    })
     .init_resource::<interact::InteractionFocus>()
     .init_resource::<pickup::Inventory>()
     .add_observer(player::spawn_player)
@@ -52,6 +58,9 @@ fn main() {
     .add_observer(interact::fire_interact)
     .add_observer(pickup::spawn_visuals)
     .add_observer(pickup::collect_on_interact)
+    .add_observer(ladder::setup_ladders)
+    .add_observer(ladder::attach_on_interact)
+    .add_observer(ladder::let_go_on_jump)
     .add_systems(Startup, (spawn_map, spawn_light, ui::setup_hud))
     .add_systems(
         Update,
@@ -63,10 +72,43 @@ fn main() {
             ui::update_prompt,
             ui::update_inventory,
         ),
+    )
+    // The yaw ease after an E-grab runs here, not in Update, so ahoy's
+    // Update-schedule camera sync can't clobber it. See `ladder.rs`.
+    .add_systems(
+        PostUpdate,
+        ladder::turn_to_ladder.before(TransformSystems::Propagate),
+    )
+    // Ladder climbing brackets bevy_ahoy's controller: read intent before it
+    // runs, overwrite the result after. See `ladder.rs`.
+    //
+    // `stash_input` runs once per *frame* (not per fixed step): it `take`s
+    // `AccumulatedInput::last_movement` and treats a missing value as
+    // "released". `AccumulatedInput` has a one-frame lifetime — ahoy clears it
+    // in `AfterFixedMainLoop` — so taking it here feeds every substep the same
+    // intent, exactly as ahoy reads it. In `FixedPostUpdate` a second substep
+    // would see `None` and stall the climb.
+    .add_systems(
+        RunFixedMainLoop,
+        ladder::stash_input.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+    )
+    .add_systems(
+        FixedPostUpdate,
+        ladder::climb
+            .after(AhoySystems::MoveCharacters)
+            .before(PhysicsSystems::First),
     );
 
     if devtools::env_flag("IMMERSIVE_AUTOPILOT") {
-        app.add_systems(Update, devtools::autopilot_drive);
+        // In PreUpdate, after bevy samples the keyboard and before
+        // bevy_enhanced_input reads it, so the autopilot's held `KeyE` is
+        // seen the same frame. See `devtools::autopilot_drive`.
+        app.add_systems(
+            PreUpdate,
+            devtools::autopilot_drive
+                .after(bevy::input::InputSystems)
+                .before(EnhancedInputSystems::Update),
+        );
     }
     if devtools::env_flag("IMMERSIVE_TELEMETRY") {
         app.add_systems(Update, devtools::telemetry);

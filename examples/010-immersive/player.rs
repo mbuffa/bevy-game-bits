@@ -20,7 +20,10 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
         ))
         .insert(input::player_input_bundle());
 
-    commands.spawn((Camera3d::default(), CharacterControllerCameraOf::new(player)));
+    commands.spawn((
+        Camera3d::default(),
+        CharacterControllerCameraOf::new(player),
+    ));
 }
 
 pub fn capture_cursor(mut cursor: Single<&mut CursorOptions>) {

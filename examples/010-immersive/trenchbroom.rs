@@ -13,7 +13,11 @@ pub fn config() -> TrenchBroomConfig {
         // smoothed normals so curved brushwork doesn't look faceted. If we
         // ever author Q1 BSPs, this needs `qbsp -wrbrushesonly` or no
         // brushes (and thus no collision) make it into the compile.
-        .default_solid_scene_hooks(|| SceneHooks::new().convex_collider().smooth_by_default_angle())
+        .default_solid_scene_hooks(|| {
+            SceneHooks::new()
+                .convex_collider()
+                .smooth_by_default_angle()
+        })
         .lightmap_exposure(Some(config::LIGHTMAP_EXPOSURE))
 }
 
@@ -24,5 +28,6 @@ pub fn register_classes(app: &mut App) {
     app.register_type::<classes::PlayerSpawn>()
         .register_type::<classes::Interactable>()
         .register_type::<classes::FuncDoor>()
+        .register_type::<classes::FuncLadder>()
         .register_type::<classes::ItemPickup>();
 }

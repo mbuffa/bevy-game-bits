@@ -5,6 +5,10 @@
 use bevy::prelude::*;
 use bevy_ahoy::prelude::*;
 use bevy_enhanced_input::prelude::*;
+// Both `bevy::prelude` (a picking event) and `bevy_enhanced_input::prelude`
+// export `Press`; name the one we mean explicitly (an explicit import beats a
+// glob), as the crate's own doc comment instructs.
+use bevy_enhanced_input::prelude::Press;
 
 use crate::config;
 
@@ -32,6 +36,12 @@ pub fn player_input_bundle() -> impl Bundle {
                 Bindings::spawn((Cardinal::wasd_keys(), Axial::left_stick())),
             ),
             (
+                // Deliberately unconditioned, like ahoy's own `minimal.rs`:
+                // holding Space is meant to re-jump the frame you land, and
+                // ahoy's jump buffer is fed by the every-frame `Fire<Jump>`.
+                // Anything that wants a jump *press* (edge) instead — e.g.
+                // `ladder::let_go_on_jump` — observes `Start<Jump>` rather than
+                // adding a `Press` here, so ahoy's buffering keeps working.
                 Action::<Jump>::new(),
                 bindings![KeyCode::Space, GamepadButton::South],
             ),
@@ -48,6 +58,13 @@ pub fn player_input_bundle() -> impl Bundle {
             ),
             (
                 Action::<Interact>::new(),
+                // Edge-triggered. Without a condition a bevy_enhanced_input
+                // action is `Down`-like and its `Fire` event triggers *every
+                // frame* the key is held — which turns any toggling
+                // `Interacted` consumer (`ladder::attach_on_interact`'s
+                // lock/unlock) into a coin flip. `door`/`pickup` only survive
+                // that by being idempotent.
+                Press::default(),
                 bindings![KeyCode::KeyE, GamepadButton::West],
             ),
         ]),

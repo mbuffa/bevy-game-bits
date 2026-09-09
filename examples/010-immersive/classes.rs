@@ -45,6 +45,31 @@ impl Default for FuncDoor {
     }
 }
 
+/// A ladder volume. The brush's collider is turned into a `Sensor` at
+/// runtime (`ladder::setup_ladders`) — the *volume* never blocks movement, it
+/// only marks the column of space in which the player is "on the ladder" and
+/// supplies the ladder's AABB. The visible rails-and-rungs mesh that
+/// `setup_ladders` spawns as a child *does* carry a solid collider, so you
+/// can't walk through the ladder itself. Being
+/// `Interactable`, aiming at it shows a prompt and E grabs it, which is how
+/// you mount from the top edge (where you're facing away from the rungs and
+/// the proximity grab deliberately won't fire).
+#[solid_class(base(Interactable))]
+pub struct FuncLadder {
+    /// Yaw in degrees the climber faces while on the ladder — toward the
+    /// platform it's bolted to. Same numbers as a Quake `angle`
+    /// (0 = +X, 90 = +Y, ...), but deliberately **not** named `angle`:
+    /// bevy_trenchbroom treats a field literally called `angle` as a brush
+    /// rotation and flings the geometry across the room. `ladder.rs` turns
+    /// this into a facing direction itself.
+    pub face_yaw: f32,
+}
+impl Default for FuncLadder {
+    fn default() -> Self {
+        Self { face_yaw: 0.0 }
+    }
+}
+
 /// A collectable. `pickup::spawn_visuals` gives it a placeholder emissive-cube
 /// mesh + sensor collider; swap for a glTF model later via the `model(...)`
 /// class attribute.

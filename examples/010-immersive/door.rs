@@ -49,7 +49,9 @@ pub fn setup_doors(
         let dir = Vec3::new(angle.cos(), 0.0, -angle.sin());
         let half_extents = aabb.size() * 0.5;
         let width = 2.0
-            * (half_extents.x * dir.x.abs() + half_extents.y * dir.y.abs() + half_extents.z * dir.z.abs());
+            * (half_extents.x * dir.x.abs()
+                + half_extents.y * dir.y.abs()
+                + half_extents.z * dir.z.abs());
         let travel = (width - door.lip).max(0.0);
 
         let closed_pos = transform.translation;
@@ -80,7 +82,11 @@ pub fn drive_doors(mut doors: Query<(&mut Transform, &mut DoorState, &FuncDoor)>
         match state.phase {
             DoorPhase::Opening => {
                 let target = state.open_pos;
-                move_towards(&mut transform.translation, target, door.speed * time.delta_secs());
+                move_towards(
+                    &mut transform.translation,
+                    target,
+                    door.speed * time.delta_secs(),
+                );
                 if transform.translation == target {
                     state.phase = DoorPhase::Open;
                     state.wait_timer.reset();
@@ -96,7 +102,11 @@ pub fn drive_doors(mut doors: Query<(&mut Transform, &mut DoorState, &FuncDoor)>
             }
             DoorPhase::Closing => {
                 let target = state.closed_pos;
-                move_towards(&mut transform.translation, target, door.speed * time.delta_secs());
+                move_towards(
+                    &mut transform.translation,
+                    target,
+                    door.speed * time.delta_secs(),
+                );
                 if transform.translation == target {
                     state.phase = DoorPhase::Closed;
                 }
