@@ -232,8 +232,10 @@ just want to back up near a ladder. Press E again (or Space) to let go.
 `assets/maps/immersive/test.map` (+ `test_bsp_source.map`, `test.bsp`) are
 **deleted**, replaced by `warehouse.map` / `warehouse_bsp_source.map`, both
 emitted by **`tools/gen_map.py`** (stdlib Python, outside the Rust build).
-`tools/gen_textures.py` (also stdlib, no PIL) emits three neutral-grey
-`dev_gray_*` PNGs beside the five original coloured ones.
+`tools/gen_textures.py` (also stdlib, no PIL) emits one patterned PNG per
+surface family beside the five original coloured ones:
+`dev_floor_concrete` (light grey), `dev_wall_brick` (dark red), `dev_deck_iron`
+(dark grey) — see the art-pass note at the end of this file.
 
 A tall room, **1280 × 896 × 512 u** interior: two platforms at z 176–192
 (4.88 m), one in each far corner, **512 u ≈ 13 m** apart — past any ahoy jump
@@ -773,6 +775,49 @@ Note the `IMMERSIVE_AUTOPILOT=1` ladder walk currently fails to climb on this
 box (the player wanders at floor level, never mounts) — but it fails identically
 on the pre-Phase-9 tree, so it's unrelated pre-existing autopilot flakiness,
 not a regression from this change.
+
+## Art pass — three surface materials (2026-09-09)
+
+The warehouse was three near-identical flat greys (`dev_gray_{floor,wall,deck}`,
+all `perceptual_roughness: 1.0` via the loose-texture loader's default), which
+made geometry hard to read — the SPEC's own "low-contrast grey-on-grey" ladder
+complaint (Phase 7 Lighting) was one symptom. Now:
+
+- **`dev_floor_concrete`** — light grey, faint 32px dev grid + a deterministic
+  speckle. On the floor slab **and the ceiling slab** (a brick roof looked
+  wrong).
+- **`dev_wall_brick`** — dark red brick, 16px offset courses, grey mortar. The
+  four outer walls only — not the ceiling, not the deck-support columns.
+- **`dev_deck_iron`** — dark grey iron, 64px panel seams + corner rivets +
+  brushed streak. Now on the two platforms **and** the four columns that hold
+  them — the load-bearing structure reads as one material.
+
+`tools/gen_textures.py` was rewritten with three pattern builders (still stdlib
+PNG, still byte-identical on re-run — variation comes from `_jitter`, an integer
+hash, not `random`). Every pattern tiles at 128px because `gen_map.py`'s `0.25`
+UV scale repeats the image every 32 map units.
+
+**First use of the GenericMaterial `.toml` sidecar seam.** bevy_trenchbroom's
+loose-texture loader checks `assets/textures/<name>.toml` before `<name>.png`
+(`main_impl.rs::default_load_loose_texture`), and `TrenchBroomPlugins` already
+registers `MaterializePlugin::new(TomlMaterialDeserializer)`, so
+`dev_deck_iron.toml` / `dev_wall_brick.toml` / `dev_floor_concrete.toml` change
+the PBR response (iron `metallic 0.3` / `roughness 0.5`, brick fully rough,
+concrete `roughness 0.85`) with **zero Rust changes** — `trenchbroom.rs` is
+untouched. Iron's `metallic` is deliberately low, not the 0.6 you'd want for
+real steel: there's no environment map in this scene, the same constraint that
+pins `CRATE_METALLIC` at 0.25 (Phase 8). Under Phase 9's spot lamps the iron
+still wants a screenshot-driven tune, not a first-principles number.
+
+Regenerate: `python3 tools/gen_textures.py && python3 tools/gen_map.py` (the
+latter rewrites both `.map` files). No `make bsp` needed — `MAP_PATH` is the
+`.map`.
+
+Landed on top of Phase 9 (branch rebased there mid-change): the ambient/sun
+constants the first draft touched (`SUN_ILLUMINANCE`, `AMBIENT_BRIGHTNESS`) no
+longer exist — Phase 9 replaced them with `AMBIENT_DARK`/`AMBIENT_LIT` + the
+lamp bank. The lit-warehouse look against the darker brick is Phase 9 tuning
+territory (`AMBIENT_LIT`, `LAMP_INTENSITY`), left to a screenshot pass.
 
 ## Environment notes
 

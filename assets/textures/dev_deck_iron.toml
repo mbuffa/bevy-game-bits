@@ -1,0 +1,13 @@
+# GenericMaterial sidecar (bevy_materialize). bevy_trenchbroom's loose-texture
+# loader checks <name>.toml before <name>.png, so this is picked up with no
+# Rust changes -- the first use of the .toml material seam in this repo.
+#
+# The warehouse has one DirectionalLight + flat ambient and NO environment map,
+# so a high `metallic` renders near-black (see config.rs CRATE_METALLIC, 0.25,
+# for the same lesson). 0.3 is a starting point tuned from the screenshot pass.
+type = "StandardMaterial"
+
+[material]
+base_color_texture = "dev_deck_iron.png"
+metallic = 0.3
+perceptual_roughness = 0.5

@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
-"""Generate the neutral-grey dev textures for the 010-immersive warehouse.
+"""Generate the WIP dev textures for the 010-immersive warehouse.
 
-Stdlib only -- no PIL (the original dev_*.png needed it, and it may not be
-installed). Writes three 128x128 RGB PNGs into assets/textures/:
+Stdlib only -- no PIL (it may not be installed). Writes three 128x128 RGB PNGs
+into assets/textures/, one per surface family, each with a real pattern so the
+geometry reads at a glance while the art is still placeholder:
 
-    dev_gray_floor  flat mid-grey, faint 32px grid
-    dev_gray_wall   slightly lighter grey, faint 32px grid
-    dev_gray_deck   darker grey for the raised platforms
+    dev_floor_concrete  light grey, faint 32px dev grid + a little speckle
+    dev_wall_brick      dark red brick, offset courses, grey mortar
+    dev_deck_iron       dark grey iron, panel seams + corner rivets
+
+Every pattern tiles seamlessly at 128px: gen_map.py gives each face a 0.25 UV
+scale, so the 128px image repeats every 32 map units and a visible seam would
+show up all over the level.
+
+Deterministic: re-running produces byte-identical files. Any per-brick / per-
+panel tonal variation comes from `_jitter` (a tiny integer hash), never from
+`random`.
 
 The ladder no longer has a texture -- its brush is `skip`-textured (invisible)
 and ladder.rs builds a real rails-and-rungs mesh. The five original coloured
 dev_*.png (dev_floor_a, dev_wall_a, dev_grid_128, dev_door, dev_trim) are left
-untouched.
+untouched. The old flat-grey dev_gray_{floor,wall,deck}.png are replaced by the
+three files above and can be deleted.
 
 Run from anywhere:  python3 examples/010-immersive/tools/gen_textures.py
-Deterministic: re-running produces byte-identical files.
 """
 
 import os
@@ -50,22 +59,102 @@ def write_png(path, rows):
         f.write(png)
 
 
-def solid_with_grid(base, line, spacing=32):
-    rows = []
+def _clamp(v):
+    return 0 if v < 0 else (255 if v > 255 else v)
+
+
+def _shade(base, delta):
+    return tuple(_clamp(c + delta) for c in base)
+
+
+def _jitter(*key):
+    """A small deterministic signed offset from an integer key -- stands in for
+    per-brick / per-panel noise without importing `random`, so output stays
+    byte-identical between runs."""
+    h = 2166136261
+    for k in key:
+        h = ((h ^ (k & 0xFFFFFFFF)) * 16777619) & 0xFFFFFFFF
+    return (h % 17) - 8  # -8..+8
+
+
+def new_rows(fill):
+    return [bytearray(bytes(fill) * SIZE) for _ in range(SIZE)]
+
+
+def put(rows, x, y, rgb):
+    i = (x % SIZE) * 3
+    row = rows[y % SIZE]
+    row[i], row[i + 1], row[i + 2] = rgb
+
+
+# --- floor: light grey concrete -------------------------------------------
+
+def floor_concrete():
+    base = (188, 188, 192)
+    grid = (170, 170, 176)
+    rows = new_rows(base)
     for y in range(SIZE):
-        row = bytearray()
         for x in range(SIZE):
-            on_line = (x % spacing == 0) or (y % spacing == 0)
-            r, g, b = line if on_line else base
-            row += bytes((r, g, b))
-        rows.append(row)
+            if x % 32 == 0 or y % 32 == 0:
+                put(rows, x, y, grid)
+            else:
+                # faint stationary speckle so a big slab isn't a dead flat
+                put(rows, x, y, _shade(base, _jitter(x >> 1, y >> 1) // 2))
+    return rows
+
+
+# --- wall: dark red brick ------------------------------------------------
+
+def wall_brick():
+    brick = (108, 44, 38)
+    mortar = (86, 80, 76)
+    course = 16      # 8 courses per 128px tile
+    brick_w = 32     # 4 bricks per row
+    mortar_px = 2
+    rows = new_rows(mortar)
+    for cy in range(0, SIZE, course):
+        row_idx = cy // course
+        offset = (brick_w // 2) if row_idx % 2 else 0
+        for bx in range(0, SIZE, brick_w):
+            tone = _shade(brick, _jitter(row_idx, bx // brick_w))
+            for y in range(cy + mortar_px, cy + course):
+                for x in range(bx + offset + mortar_px, bx + offset + brick_w):
+                    put(rows, x, y, tone)
+    return rows
+
+
+# --- deck: dark grey iron ----------------------------------------------
+
+def deck_iron():
+    base = (66, 68, 72)
+    seam = (44, 46, 50)
+    rivet = (94, 97, 103)
+    panel = 64       # 2 panels per axis per tile; seams land on 0 and 64 -> wraps
+    seam_px = 2
+    rows = new_rows(base)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            # brushed-metal streak
+            put(rows, x, y, _shade(base, (_jitter(y, 0) // 4)))
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if x % panel < seam_px or y % panel < seam_px:
+                put(rows, x, y, seam)
+    # four rivets per panel, inset 6px from each corner
+    for py in range(0, SIZE, panel):
+        for px in range(0, SIZE, panel):
+            for (rx, ry) in ((6, 6), (panel - 6, 6), (6, panel - 6), (panel - 6, panel - 6)):
+                cx, cy = px + rx, py + ry
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        put(rows, cx + dx, cy + dy, rivet)
     return rows
 
 
 TEXTURES = {
-    "dev_gray_floor": lambda: solid_with_grid((104, 104, 110), (92, 92, 98)),
-    "dev_gray_wall": lambda: solid_with_grid((126, 126, 132), (112, 112, 118)),
-    "dev_gray_deck": lambda: solid_with_grid((88, 88, 94), (76, 76, 82)),
+    "dev_floor_concrete": floor_concrete,
+    "dev_wall_brick": wall_brick,
+    "dev_deck_iron": deck_iron,
 }
 
 

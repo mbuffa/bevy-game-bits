@@ -1,0 +1,9 @@
+# GenericMaterial sidecar. Brick is fully rough and non-metallic -- stated
+# explicitly so the file documents the intent rather than leaning on the
+# loader's default (which is also roughness 1.0 / metallic 0.0).
+type = "StandardMaterial"
+
+[material]
+base_color_texture = "dev_wall_brick.png"
+metallic = 0.0
+perceptual_roughness = 1.0

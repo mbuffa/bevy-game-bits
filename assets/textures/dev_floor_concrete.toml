@@ -1,0 +1,9 @@
+# GenericMaterial sidecar. Sealed concrete -- a touch less rough than the
+# default so the floor catches a faint sheen under the directional light and
+# doesn't read as flat paper.
+type = "StandardMaterial"
+
+[material]
+base_color_texture = "dev_floor_concrete.png"
+metallic = 0.0
+perceptual_roughness = 0.85
