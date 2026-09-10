@@ -27,6 +27,12 @@ pub struct Interact;
 #[action_output(bool)]
 pub struct Grab;
 
+/// LMB: use the active inventory item on whatever the crosshair is on —
+/// consumed by `use_item.rs` (Phase 16). Edge-triggered like `Interact`.
+#[derive(Debug, InputAction)]
+#[action_output(bool)]
+pub struct Use;
+
 /// `PlayerInput` plus every action binding, inserted onto the player entity
 /// when it spawns. Movement/camera bindings mirror bevy_ahoy's own
 /// `minimal.rs` example; `Interact` is appended for our own use-raycast.
@@ -81,6 +87,24 @@ pub fn player_input_bundle() -> impl Bundle {
                 // Same `Start`/`Complete` pair as ahoy's unconditioned `Jump`.
                 Action::<Grab>::new(),
                 bindings![MouseButton::Right, GamepadButton::RightTrigger2],
+            ),
+            (
+                // Edge-triggered, same reasoning as `Interact`: `use_item.rs`
+                // toggles the door lock / damages a crate, so a per-frame `Fire`
+                // would flip it back and forth for the length of the click.
+                Action::<Use>::new(),
+                Press::default(),
+                // `require_reset`: the `PlayerInput` context is switched off
+                // while the pack is open (`player::sync_cursor_mode`), and the
+                // same left-click that closes a board or re-grabs the cursor
+                // must not also fire `Use` the frame the context comes back.
+                // This is bevy_enhanced_input's own answer — hold the action
+                // inert until its inputs go idle again.
+                ActionSettings {
+                    require_reset: true,
+                    ..default()
+                },
+                bindings![MouseButton::Left, GamepadButton::East],
             ),
         ]),
     )

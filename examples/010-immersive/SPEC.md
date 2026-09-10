@@ -44,7 +44,14 @@ Observers:  On<Add, PlayerSpawn> -> CharacterController + Collider + camera
             (Phase 9: On<Add, LightFixture> -> lights::spawn_fixtures — lamp mesh + downward SpotLight + Powered)
             (Phase 9: On<SceneCollidersReady> -> lights::setup_switches — plate + indicator from the brush AABB + SwitchState)
             (Phase 9: On<Interacted> -> lights::toggle_on_interact — flip the switch, push Powered to matching fixtures)
+            (Phase 10: On<Add, PropDoor> -> door::spawn_swing_doors — kinematic body + leaf/handle/lock-plate children + DoorSwing)
+            (Phase 10: On<Interacted> -> door::toggle_swing_on_interact — E toggles, refuses while locked)
+            (Phase 10: On<Add, PropWoodCrate> -> breakable::spawn_wood_crates — dynamic body + collider + Breakable + plank mesh)
+            (Phase 16: On<Fire<Use>> -> use_item::fire_use — active lockpick clears DoorSwing::locked / active crowbar damages a Breakable)
 Update:     (Phase 9) lights::sync_fixtures / sync_switch_indicators / sync_ambient — idempotent state mirrors
+            (Phase 10) door::swing_doors (ease the yaw) / door::sync_lock_plates (idempotent mirror)
+            (Phase 10) breakable::{damage_on_impact -> shatter} chained / despawn_after (debris cleanup)
+            (Phase 16) use_item::select_active_item — number keys pick a pickup::Inventory slot
 PostUpdate: (Phase 8) carry::hold_prop — park the held crate in front of the camera, before Propagate
 PreUpdate:  bevy_enhanced_input -> ahoy AccumulatedInput
 RunFixedMainLoop:
@@ -668,6 +675,13 @@ and the ladder (all rejected); and the `CRATE_*` material look.
 
 ## Phase 9 — Warehouse lighting and the wall switch ✅
 
+> **Superseded as the default by Phase 12** — the warehouse now loads *lit*
+> (`start_on=1` on the `main_lights` bank and the switch, `GlobalAmbientLight`
+> seeded at `AMBIENT_LIT`). The switch, circuit, `sync_*` mirrors and
+> everything below still work exactly as described; only the initial state
+> flipped. The dark room is one switch-flip away, and `IMMERSIVE_LIGHTS=toggle`
+> now exercises lit→dark→lit.
+
 **Goal:** the room loads near-black and gives the platform-B climb a payoff.
 Overhead warehouse lamps, wired to a light switch on platform B's north wall —
 the deck with no ladder, so the crate stack is the only way to reach it. Four
@@ -862,6 +876,314 @@ lengthened to match (legs 1 and 6); the ladder script's opening walk had enough
 slack to survive unchanged. Whether 4.5 m/s and the skid *feel* right, and
 whether the platform-B jump (horizontal reach now ~3.2 m, was ~8.5) still lands,
 are the human-pass items.
+
+## The lockpick arc — Phases 10–16
+
+**Goal:** the demo's first *object you own and then use somewhere else*. Stack
+crates onto platform B → find a wooden crate and a crowbar up there → throw the
+crate off the deck so it smashes open on the concrete (or crowbar it) → pick up
+the lockpick → the locked east-wall door → make the lockpick your active item
+and LMB it open → walk the corridor → the bay → out through the large opening
+to the yard.
+
+Phases 10–13 are **done**, and a **minimal Phase 16** (LMB "use active item" —
+lockpick opens the door, crowbar breaks crates) is done so the demo plays end
+to end. Phase 14 (grid inventory) and Phase 15 (quickbar) remain **specced,
+not built** — see the plan file
+`~/.claude/plans/llo-there-i-d-keen-umbrella.md`.
+
+### Phase 10 — Props: models + a working hinged door ✅
+
+**Goal:** procedural models for a lockpick, a crowbar, a wooden crate and a
+hinged door; all spawn from the map; the door visibly swings on `Interacted`.
+
+Done:
+- **`items.rs`** — the catalogue. One `const CATALOGUE: &[ItemDef]` keyed by the
+  `ItemPickup::item` string, carrying both the world facts (name, prompt,
+  `ItemShape`) and the inventory facts (`cells`, `color`) Phase 14 will need, so
+  the grid inventory has nothing to invent. `item_mesh(shape)` builds each model
+  the `ladder::ladder_mesh` way — `Mesh::from(Cuboid).merge(..)` into one mesh,
+  **cuboids only** so every merge has identical vertex attributes and can't
+  fail. `pickup::spawn_visuals` now looks the key up (unknown key → the old
+  emissive-cube placeholder) and every pickup gets a fixed
+  `config::PICKUP_GRAB_SIZE` `Sensor` cube as its aim volume, whatever the
+  model's real size.
+- **`breakable.rs`** — `PropWoodCrate` → a `Dynamic` body light enough
+  (`WOOD_CRATE_MASS` 12 kg ≤ `CARRY_MAX_MASS`) that **`carry.rs` lifts and
+  throws it with zero changes** (its grab gate is body-type + mass and never
+  checks for `PropCrate`). `damage_on_impact` reads Avian contact impulses the
+  `vehicle::impact` way — `impulse / mass` is the Δv, and
+  `damage_from_delta_v` (pure, unit-tested) only bites past
+  `BREAK_MIN_DELTA_V` (6 m/s), so setting the crate down, bumping it, or it
+  resting on the floor (a tiny support impulse every step) are all free. A
+  full drop off platform B (deck top 4.88 m → ~16.8 m/s) one-shots a
+  100-health crate; a crowbar (`CROWBAR_DAMAGE` 55, Phase 16) takes two swings.
+  `shatter` (health ≤ 0) despawns the crate, throws `DEBRIS_COUNT` short-lived
+  debris cubes, and spawns `contains` as an `ItemPickup` — which
+  `pickup::spawn_visuals` fills in.
+- **`door.rs`** grew a second door beside the `FuncDoor` slider:
+  `PropDoor` + `DoorSwing`. **`PropDoor` is a `point_class`, and its origin is
+  the hinge** — see the trap below. `spawn_swing_doors` rotates the entity's
+  own `Transform` to `face_yaw` and hangs the leaf (`door_leaf_mesh`, panelled,
+  unit-tested extents), two handle knobs and a `LockPlate` (emissive red while
+  `locked`, green once picked) off it as children. The leaf carries the solid
+  `Collider`; the entity carries `RigidBody::Kinematic`, so the child collider
+  gets a `ColliderOf` and blocks the player (the `ladder.rs` "a collider with
+  no `RigidBody` ancestor is invisible to ahoy's KCC" lesson). `swing_doors`
+  eases the yaw with `approach` (scalar `move_towards`, snap-on-arrival,
+  unit-tested). `toggle_swing_on_interact` — **E toggles** (no `wait` timer: a
+  corridor door that auto-shuts is a nuisance, unlike a Quake `func_door`), and
+  refuses while `locked` (swaps the prompt to `DOOR_PROMPT_LOCKED`).
+  `sync_lock_plates` is the idempotent `Changed<DoorSwing>` mirror onto the
+  plate material, so Phase 16's unlock (flip the bool) needs no transition
+  hook.
+
+**The load-bearing trap — solid vs point class geometry.**
+`FuncLightSwitch` / `FuncLadder` are `skip`-textured **solid** brushes: their
+entity `Transform` is **identity**, geometry and `ColliderAabb` baked in world
+space, which is why `lights::setup_switches` anchors children at
+`aabb.center()`. A swinging door **cannot** be a solid class: rotating an
+identity `Transform` pivots the geometry about the **world origin** and flings
+it across the room (the `angle`-field failure mode again). `PropDoor` is a
+`point_class` precisely so it has a real `Transform` to rotate, with the origin
+at the hinge and the leaf a `+width/2` child. Point entity → local children;
+solid entity → world-space children. Opposite rules; write it down.
+
+**Verified (2026-09-09)** with `IMMERSIVE_PROPS` (a new devtool, the
+`IMMERSIVE_LIGHTS=toggle` pattern — fires `Interacted` on a frame timer because
+synthetic input is blocked on this Mac):
+- `=door`: telemetry stepped `doors(open=0/1)` → `firing Interacted` →
+  `doors(open=1/1)` → `firing Interacted` → `doors(open=0/1)`. Open, then close.
+- `=break`: `wood_crates=1 pickups=2` → `zeroing a breakable's health` →
+  `wood_crates=0 pickups=3`. Crate despawned, contained "lockpick" pickup
+  appeared, no panic. `IMMERSIVE_TELEMETRY` gained `doors(open/total locked)`,
+  `wood_crates` and `pickups` counts.
+- Map loads with the four new entities and **no Avian `ColliderAabb` /
+  negative-mass panic** — the winding is right.
+
+### Phase 11 — Expand the map: corridor → bay → yard ✅
+
+All in `tools/gen_map.py`, **strictly additive at x > 656** (the
+009-world-map "grow, don't move" rule — every crate/lamp/switch/ladder origin
+and both autopilot scripts are pinned to the old geometry). The east wall
+(`box_brush((640,-464,-16),(656,464,528))`) was **split**, not moved, into
+three segments leaving a `DOORWAY_HW`×`DOORWAY_H` (≈1.1 m × 2.3 m) hole. Beyond
+it: a `CORRIDOR` (x 656..`CORRIDOR_END`=1120, ~3.15 m tall) → a tall brick
+`BAY` room (x `CORRIDOR_END`..`ROOM_END`=1800, y ±336, z 0..300) → a `YARD` —
+an untextured open square (x `ROOM_END`..+800, y ±556, z 0..360). The bay's
+far wall has a large `HANGAR_HW`×`HANGAR_H` (≈4.3 m × 3.25 m) opening to the
+yard where a roll-up hangar door will eventually go (`FuncDoor`, `angle -1`);
+**left un-doored for now** — you walk through.
+
+> **Rounds 3–4:** round 3 deleted the intermediate room (a misread of the
+> user's ask) and pulled the yard in to butt the corridor; round 4 put the
+> room back as the `BAY` and shifted the yard back out past it. The
+> **round-2 corridor→room z-fight** (the corridor ceiling/walls ran *into* the
+> room's west-wall zone — two brushes sharing a volume) is the lesson that
+> stuck: **abut, don't overlap.** `CORRIDOR_END` and `ROOM_END` are each used
+> by *both* sides of their junction, so the segments share a face (fine) not a
+> volume (z-fights).
+
+**Trap: an open-sky room leaks `qbsp`.** The yard is capped with a
+`skip`-textured lid brush — renders nothing at runtime but seals the volume for
+`make bsp`. A real sun + skybox is a later job; for now it's lit by a `"yard"`
+`light_fixture` circuit.
+
+**Corridor lighting (round 3):** a `"down"` `light_fixture` hangs its shade at
+eye level in a ~3 m corridor, and a bracket that `aim`s *across* a 1.5 m-wide
+corridor reaches the centre line. The two corridor lamps `aim "east"`/`"west"`
+(*along* the corridor) — `spawn_fixtures` runs the bracket arm parallel to the
+wall and rakes the SpotLight down the length, so the shade hugs the wall near
+the ceiling. Own `"corridor"` circuit, always on. The `BAY` (~7.6 m tall) has
+room for ordinary `"down"` ceiling lamps (`"bay"` circuit); the yard has 3
+`"yard"` floods. All always on.
+`warehouse.map` / `warehouse_bsp_source.map` regenerate byte-deterministically.
+
+**Verified (round 4, 2026-09-10):** `IMMERSIVE_PROPS=pick` walks the player
+door → corridor → bay; `260910-corridor.png` and `260910-bay.png` show clean
+ceilings at both junctions and the large open doorway to the yard; the lockpick
+chain still runs end to end (`doors(open=0/1 locked=1 → 0 → open 1/1)`); no
+Avian panic.
+
+### Phase 12 — Lights on by default ✅
+
+The warehouse is now a place you traverse on the way east, not the puzzle
+itself, so it loads lit:
+- `gen_map.py`: `main_lights` fixtures + the `func_light_switch` get
+  `start_on=1`; the switch's initial prompt is `"Turn off the lights"`.
+- `main.rs` seeds `GlobalAmbientLight` at `config::AMBIENT_LIT` (was
+  `AMBIENT_DARK`). `lights::sync_ambient` still owns it every frame and still
+  drops to dark if the switch is flipped off.
+- Doc text updated: `main.rs` and `gen_map.py` module headers, this file's
+  Phase 9 framing (superseded as the *default* — the dark room is one flip
+  away, and `IMMERSIVE_LIGHTS=toggle` now proves lit→dark→lit).
+
+**Verified (2026-09-09):** `IMMERSIVE_TELEMETRY` shows `lights=<N>/<N>
+switches_on=1` from the first frame (`N` = 8 `main_lights` + 4 `night` + the
+east-extension lamps — 20 after round 4: 2 corridor + 3 bay + 3 yard); the
+`260909-warehouse-lit.png` shot
+shows the lit room; no white-out (the Phase 9 finding holds).
+
+### Phase 13 — Put everything where it belongs ✅
+
+`gen_map.py` `PROPS`, final placement:
+- The locked `prop_door` (`locked 1`) fills the east-wall doorway. **Hinge (`y`
+  in `_door`) on a jamb at exactly `DOORWAY_HW`**, `face_yaw 0` so the closed
+  leaf lies across the opening (Bevy +X) and `swing 95°` carries it into the
+  corridor, away from a player approaching from the warehouse. The `x` in
+  `_door` (643, not the wall mid-line 648) sits the thin leaf just inside the
+  near wall face so you don't see daylight around it.
+- **The leaf and the opening can't drift apart** (round 2, after two
+  play-tests still showed gaps): `_door()` emits `width`/`height` **derived
+  from `DOORWAY_HW`/`DOORWAY_H`** (`2·DOORWAY_HW/_UPM`, `DOORWAY_H/_UPM`), and
+  `door::spawn_swing_doors` builds the leaf mesh + collider `2·DOOR_REBATE`
+  wider and `DOOR_REBATE` (0.02 m) taller and shifts it toward the hinge, so
+  the closed leaf *laps* its frame on the hinge side, the latch side and the
+  head — a doorstop rebate, no gap possible however the metres round against
+  the integer TB hole. The kinematic leaf collider overlapping the static
+  jamb/lintel colliders is harmless. `DOOR_WIDTH`/`DOOR_HEIGHT` in `config.rs`
+  are now only the fallback for a `prop_door` placed with no matching hole.
+- The wooden crate (`contains "lockpick"`) and the crowbar `item_pickup` sit on
+  platform B (deck top z 192, `_wood_crate` gained a `z_base`), reachable only
+  by the Phase 8 crate stack.
+- The Phase 10 spawn-line test props are gone; there is **no** loose lockpick
+  any more — it exists only once the crate breaks.
+
+**Verified (2026-09-09, updated round 3):** `IMMERSIVE_PROPS=locked` — telemetry
+holds at `doors(open=0/1 locked=1)` through the fired `Interacted` (the door
+refuses while locked). `IMMERSIVE_PROPS={door,locked,pick}` **warp + hold** the
+player 2 m in front of the door facing it (`exercise_props`; a stand-in for the
+Phase 16 autopilot and how the `260909-corridor-door.png` shot is taken —
+`CharacterLook` is `#[require]`d onto the *player*, not the camera, and the
+camera `Transform` rotation must be pinned too or ahoy's
+`copy_camera_to_character_look` clobbers it). Play-throughs confirmed: crate
+breaks by throwing it off platform B, lockpick drops and picks up, the door
+blocks the player while locked, and (round 3) the corridor now opens straight
+onto the yard with no ceiling z-fight.
+
+**Left for a human:** the look of the corridor / bay / yard from a real walk-through,
+and the full crate-stack → platform-B → throw → pick → yard chain in one
+sitting. Picking the lock itself is done (Phase 16 minimal,
+below). `IMMERSIVE_AUTOPILOT=door` and `IMMERSIVE_WARP=platform_b` are still the
+intended harness additions.
+
+### Phase 14 — The grid inventory ✅
+
+`pickup::Inventory(Vec<String>)` is gone; the player's pack is one
+`src/inventory/` board (`InventoryPlugin::headless()` + `main.rs::spawn_pack`
+→ `pickup::PlayerPack`, 6×5, centred, `InventoryWindow { open: false }`, `Tab`
+toggles). Single `Camera3d` is bevy_ui's target — no `Camera2d`.
+
+- `pickup::collect_on_interact` → `InventoryCommands::add(**pack,
+  InventoryItem::new(def.name, def.description, def.cells, def.color))`. **On
+  `None` the pickup is left in the world** and `PackFullFlash` shows
+  `config::PACK_FULL_MSG` (`ui::update_notice`) — the invariant the quickbar's
+  "room in the pack first" rule stands on.
+- `pickup::ItemKind(&'static str)` + `tag_item_kind` (`On<Add, InventoryItem>`,
+  keyed on the display name via `items::lookup_by_name`) is the host's join from
+  the library's display-only `InventoryItem` back to `items::CATALOGUE` — so
+  `use_item`/`ui`/`viewmodel` dispatch on data, and every add path (direct,
+  `AddItem`, transfer) is covered by one rule.
+- `ui::update_inventory` / the top-left text line are deleted — the quickbar
+  strip is the readout.
+- **The cursor rework turned out to be one write, not two systems.**
+  `player::sync_cursor_mode` (idempotent mirror, `lights::sync_*` rule): cursor
+  locked+hidden **and** `ContextActivity::<PlayerInput>` active iff
+  `in_control = !CursorReleased && no board open`. Switching the *whole*
+  `PlayerInput` context off — `Movement`/`Jump`/`Crouch`/`RotateCamera`/
+  `Interact`/`Grab`/`Use` all live in it — is the entire look/move freeze;
+  `AccumulatedInput` just stops being written and ahoy clears it every frame.
+  The specced `stash_input`-slot gate + `PostUpdate` camera hold was **not
+  needed**. `player::player_cursor_input` (raw `ButtonInput`, survives the
+  frozen context): `Tab` toggles the pack, `Escape` closes a board or else
+  releases the cursor, LMB re-grabs.
+- **Trap:** `ContextActivity<C>` is `#[component(immutable)]` — re-insert only
+  on a real change or bevy_enhanced_input resets every action every frame.
+- **Trap:** the re-grab / board-closing click must not also fire `Use` — `Use`
+  gains `ActionSettings { require_reset: true, .. }`, BEI's own "hold inert
+  until the input goes idle" for a context that toggles.
+
+### Phase 15 — The quickbar (`src/inventory/quickbar.rs`) ✅
+
+A new **library module** — an optional `QuickbarPlugin` beside
+`InventoryPlugin` that drives any board carrying a `Quickbar`
+(`WorldMapTimePlugin` / `VehicleImpactPlugin` shape). Per-board components
+(`Quickbar { slots: Vec<Option<Entity>> }`, `ActiveSlot`, `QuickbarStyle`,
+`QuickbarParts`); `QuickbarSet::{Build, Assign, Input, Sync}` after
+`InventorySet::Sync`.
+
+- **Pointers, not storage.** `prune_and_assign_slots` (one idempotent pass):
+  clear any slot whose item has left the board → `Cleared` (+ `Deactivated` if
+  it was active), then drop any still-loose board item into `first_free()` →
+  `Assigned`. The prune-against-the-world route is the *only* correct one —
+  `InventoryAction::{Added,Removed,Evicted}` carry the item **data, not an
+  entity**, so they can't identify a slot.
+- `select_slot` — raw `ButtonInput<KeyCode>` (**not** a BEI action: the FPS
+  context is off exactly when the pack is open). `1`–`9`/`0`; an empty or
+  already-active slot's key → `ActiveSlot(None)`. Also promotes a board
+  double-click (`InventoryAction::Activated`) into activating that item's slot.
+- `quickbar_drop` — runs `.in_set(InventorySet::Interaction)`
+  `.after(update_drag).before(end_drag)`. A drag released over the strip
+  (hit-tested with the pure `hovered_slot(normalized, slots)` against a
+  `RelativeCursorPosition` on the strip root) moves/swaps the pointer, then
+  **claims the release** (revert tile to its own cell, drag state → `Idle`) so
+  `end_drag` finds nothing and fires no spurious `Rejected`.
+- `sync_quickbar_ui` — every-frame mirror; fill = item colour, border marks the
+  active slot, colours from the board's `InventoryTheme`, pixels from
+  `QuickbarStyle`.
+- `QuickbarAction` (`Assigned`/`Activated`/`Deactivated`/`Cleared`) — the
+  fire-a-message seam.
+- Tests: `hovered_slot` / `Quickbar` helpers in `#[cfg(test)]`; behaviour in
+  `tests/inventory_quickbar.rs` (auto-assign, remove-clears-and-frees-hands,
+  key select, drag-to-slot, drag-onto-occupied-swaps).
+
+### Phase 16 — Use the active item, LMB ✅ (full)
+
+`use_item::fire_use` (`On<Fire<input::Use>>`) resolves the active item through
+the quickbar — `PlayerPack → (Quickbar, ActiveSlot) → slot → item entity →
+ItemKind` — then dispatches on `ItemKind.0`:
+
+- `"lockpick"` on a `locked` `DoorSwing` → `locked = false`, prompt →
+  `DOOR_PROMPT_OPEN`, **and `InventoryCommands::remove(item)`** — one use.
+  `quickbar::prune_and_assign_slots` clears the slot and frees the hands next
+  frame; `door::sync_lock_plates` turns the plate green.
+- `"crowbar"` on a `Breakable` → `health -= CROWBAR_DAMAGE` (not consumed).
+- else → silent no-op.
+
+`Use` is `MouseButton::Left` + `GamepadButton::East`, `Press::default()` +
+`ActionSettings { require_reset: true, .. }` (see Phase 14 traps).
+
+**The viewmodel** (`viewmodel.rs`) — one `ViewModel` entity is a child of the
+camera (`spawn_viewmodel` on `On<Add, CharacterControllerCameraOf>`) at
+`config::VIEWMODEL_OFFSET`. `sync_viewmodel` (idempotent mirror) rebuilds the
+mesh child from `items::item_mesh` when the active `ItemKind` changes and hides
+the holder while carrying a crate / climbing / a pack open; `bob_viewmodel`
+adds a speed-scaled view bob (`bob_offset`, unit-tested). Plain camera child —
+no "write the camera late" trick, since it's not a physics body.
+
+`ui::update_prompt` resolves the held item through the quickbar and appends
+`· LMB: pick the lock` / `· LMB: pry it open`.
+
+**Verified (2026-09-10):**
+- `IMMERSIVE_INVENTORY=use` — adds a lockpick (auto-fills quickbar slot 1),
+  presses real `Digit1`, warps to the door, holds real LMB:
+  `use_item: picked the lock on door 251v0`, telemetry
+  `pack(items=2 active=Some(0))` → `pack(items=1 active=None)` and
+  `doors(locked=1 → 0)` — **lockpick consumed, hands freed**. `260910-viewmodel.png`
+  shows the pick in hand.
+- `IMMERSIVE_INVENTORY=open` — real `Tab` opens the board over the 3D scene
+  (`260910-pack-open.png`); telemetry `pack(open=true)` and the player's
+  `cam_yaw_pitch` / `pos` frozen exactly while open, then `open=false` on the
+  second `Tab`.
+- `IMMERSIVE_INVENTORY=drag` — hand-driven drag of the crowbar tile onto
+  quickbar slot 5; `260910-quickbar-drag.png` shows it moved there with the
+  tile still on the board and its description panel up, no `Rejected` fired.
+- `IMMERSIVE_AUTOPILOT=crates` still runs the full grab/place/throw walk;
+  `cargo test` green (lib 64, `inventory_quickbar` 6, `inventory_drag` 27,
+  example 14).
+
+**Still deferred:** the real `IMMERSIVE_AUTOPILOT=door` walk and
+`IMMERSIVE_WARP=platform_b`.
 
 ## Environment notes
 

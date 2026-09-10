@@ -22,7 +22,7 @@ Two files, from one box list:
     assets/maps/immersive/warehouse.map             -- the runtime map. No
         Quake `light` entity, but a bank of `light_fixture` point entities
         (real-time SpotLights, built by lights.rs) and one `func_light_switch`
-        (Phase 9). The main bank loads *off*.
+        (Phase 9). The main bank loads *on* (Phase 12).
     assets/maps/immersive/warehouse_bsp_source.map  -- adds a Quake `light`
         at each fixture origin and an `info_player_start` for the ericw-tools
         compile (`make bsp`). Not the default; not verified unless built.
@@ -32,20 +32,34 @@ Deterministic: re-running produces byte-identical files.
 
 Geometry (TrenchBroom units, +Z up, +Y north; 39.37008 u/m)
 ----------------------------------------------------------
-Interior 1280 x 896 x 512 u (32.5 x 22.8 x 13.0 m). Two decks at z 176..192
-(4.88 m); a 512 u (13.0 m) gap between them -- past any jump. Ladder on deck
-A's south face, running 16 u above the deck so the top rungs are grabbable.
-Deck B has no ladder -- the player reaches it by climbing `prop_crate` props
-(carry.rs, Phase 8): a big fixed 1.6 m crate is pre-placed against its south
-edge, and 3 loose 0.8 m crates sit nearby to stack on top. Two more crates on
-the spawn line drive the autopilot.
+Warehouse interior 1280 x 896 x 512 u (32.5 x 22.8 x 13.0 m). Two decks at
+z 176..192 (4.88 m); a 512 u (13.0 m) gap between them -- past any jump. Ladder
+on deck A's south face, running 16 u above the deck so the top rungs are
+grabbable. Deck B has no ladder -- the player reaches it by climbing
+`prop_crate` props (carry.rs, Phase 8): a big fixed 1.6 m crate is pre-placed
+against its south edge, and 3 loose 0.8 m crates sit nearby to stack on top.
+Two more crates on the spawn line drive the autopilot.
 
-Lighting (Phase 9): 6 ceiling + 2 aisle `light_fixture` lamps on the
-"main_lights" circuit, off at load; 4 always-on "night" bracket lamps, one on
-each deck support pillar (the dark spawn + the crate-stacking corner would be
-unworkable otherwise); a `func_light_switch` on deck B's north wall (z 256,
-hand height) — with its own red PointLight beacon — that the crate stack is the
-only way to reach.
+Phase 11 (+ round 3/4) adds a straight run EAST of the warehouse's east wall,
+all of it at x > 656 (nothing west of that moves): a door-sized hole in the
+east wall -> a corridor (x 656..CORRIDOR_END, ~3.15 m tall) -> a tall brick
+`bay` room (x CORRIDOR_END..ROOM_END, y ±336, z 0..300) -> an untextured
+open-square yard (x ROOM_END..+800, y -556..556, z 0..360; a `skip` lid seals
+it for `make bsp`, skybox later). The bay's far wall has a large HANGAR_*
+opening to the yard where a roll-up hangar door will eventually go -- left
+un-doored for now.
+
+Phase 13 props: a locked `prop_door` (breakable.rs / door.rs) fills the
+east-wall doorway -- the only door -- and a wooden crate holding a "lockpick"
+plus a "crowbar" pickup sit on platform B (reached only by the crate stack).
+Throw the crate off the deck to shatter it and drop the lockpick.
+
+Lighting (Phase 9 + 12): 6 ceiling + 2 aisle `light_fixture` lamps on the
+"main_lights" circuit, now *on* at load; 4 always-on "night" bracket lamps, one
+on each deck support pillar; 2 "corridor" wall brackets + 3 "bay" ceiling lamps
++ 3 "yard" floods down the east extension, all always on; a `func_light_switch`
+on deck B's north wall (z 256, hand height) -- with its own PointLight beacon --
+that still toggles the whole "main_lights" bank (it just starts on now).
 """
 
 import os
@@ -125,15 +139,33 @@ DECK = "dev_deck_iron"
 LADDER_TEX = "skip"
 
 # Interior: x -640..640, y -448..448, z 0..512. 16 u shell.
+#
+# The east wall (x 640..656) carries a door-sized hole at y -DOORWAY_HW..HW,
+# z 0..DOORWAY_H — the mouth of the Phase 11 corridor. Everything WEST of x 656
+# is byte-for-byte what Phase 9 left (the 009-world-map "grow, don't move"
+# rule: every crate / lamp / switch / ladder origin and both autopilot scripts
+# are pinned to it).
+DOORWAY_HW = 22    # door-opening half-width (u); DOOR_WIDTH is ~1.12 m ≈ 44 u
+DOORWAY_H = 90     # door-opening height (u) ≈ 2.3 m
+CORRIDOR_HW = 30   # corridor interior half-width (u) ≈ 1.5 m
+CORRIDOR_H = 124   # corridor interior height (u) ≈ 3.15 m
+CORRIDOR_END = 1120  # corridor east limit (u); the bay's west wall butts here
+ROOM_END = 1800    # bay east outer face (u) == the yard's west outer face
+HANGAR_HW = 84     # bay->yard opening half-width (u) ≈ 4.3 m — a future hangar door
+HANGAR_H = 128     # bay->yard opening height (u) ≈ 3.25 m
+
 WORLDSPAWN = [
     # floor / ceiling -- both concrete
     box_brush((-656, -464, -16), (656, 464, 0), FLOOR, tex_top=FLOOR),
     box_brush((-656, -464, 512), (656, 464, 528), FLOOR),
-    # walls: west, east, south, north
+    # walls: west, south, north
     box_brush((-656, -464, -16), (-640, 464, 528), WALL),
-    box_brush((640, -464, -16), (656, 464, 528), WALL),
     box_brush((-640, -464, -16), (640, -448, 528), WALL),
     box_brush((-640, 448, -16), (640, 464, 528), WALL),
+    # east wall, split around the corridor doorway (y ±DOORWAY_HW, z 0..DOORWAY_H)
+    box_brush((640, -464, -16), (656, -DOORWAY_HW, 528), WALL),
+    box_brush((640, DOORWAY_HW, -16), (656, 464, 528), WALL),
+    box_brush((640, -DOORWAY_HW, DOORWAY_H), (656, DOORWAY_HW, 528), WALL),
     # platform A (top-left, ladder deck) and platform B (top-right)
     box_brush((-640, 64, 176), (-256, 448, 192), DECK, tex_top=DECK),
     box_brush((256, 64, 176), (640, 448, 192), DECK, tex_top=DECK),
@@ -143,6 +175,73 @@ WORLDSPAWN = [
     box_brush((320, 112, 0), (352, 144, 176), DECK),
     box_brush((544, 112, 0), (576, 144, 176), DECK),
 ]
+
+# --- east extension: corridor -> bay -> exterior yard ------------------------
+#
+# A straight run east from the warehouse's east wall. Purely additive — all of
+# it is at x > 656. The `prop_door` (Phase 13) sits in the DOORWAY_* hole in
+# the east wall above; the corridor beyond it is a touch wider than the doorway
+# so the leaf has somewhere to swing.
+#
+# Round 3 deleted the intermediate room, round 4 put it back as a **bay** — a
+# tall staging room whose far wall has a large opening to the exterior where a
+# *hangar door* will eventually go (`FuncDoor`, `angle -1` = roll up). For now
+# that opening is left un-doored: you just walk through.
+#
+# **Abut, don't overlap.** Each segment stops where the next begins — two
+# brushes sharing a face is fine, two sharing a *volume* z-fights (round 2).
+#
+#   corridor  x 656..CORRIDOR_END          y ±CORRIDOR_HW  z 0..CORRIDOR_H
+#   bay       x CORRIDOR_END..ROOM_END      y ±336          z 0..300
+#   yard      x ROOM_END..+800   y -556..556  z 0..360      (open square, `skip` lid)
+
+CORRIDOR = [
+    box_brush((656, -CORRIDOR_HW, -16), (CORRIDOR_END, CORRIDOR_HW, 0), FLOOR, tex_top=FLOOR),
+    box_brush((656, -CORRIDOR_HW, CORRIDOR_H), (CORRIDOR_END, CORRIDOR_HW, CORRIDOR_H + 16), FLOOR),
+    box_brush((656, -CORRIDOR_HW - 16, -16), (CORRIDOR_END, -CORRIDOR_HW, CORRIDOR_H + 16), WALL),
+    box_brush((656, CORRIDOR_HW, -16), (CORRIDOR_END, CORRIDOR_HW + 16, CORRIDOR_H + 16), WALL),
+]
+
+# Bay: a tall brick room. West wall split around the corridor mouth (corridor
+# cross-section, no door); east wall split around the large HANGAR_* opening to
+# the yard (no door yet). Ceiling at z 300 leaves lintel room for a future
+# roll-up door.
+_BAY_HW = 336
+BAY = [
+    box_brush((CORRIDOR_END, -_BAY_HW, -16), (ROOM_END, _BAY_HW, 0), FLOOR, tex_top=FLOOR),
+    box_brush((CORRIDOR_END, -_BAY_HW, 300), (ROOM_END, _BAY_HW, 316), FLOOR),
+    # west wall around the corridor mouth
+    box_brush((CORRIDOR_END, -_BAY_HW, -16), (CORRIDOR_END + 16, -CORRIDOR_HW, 316), WALL),
+    box_brush((CORRIDOR_END, CORRIDOR_HW, -16), (CORRIDOR_END + 16, _BAY_HW, 316), WALL),
+    box_brush((CORRIDOR_END, -CORRIDOR_HW, CORRIDOR_H), (CORRIDOR_END + 16, CORRIDOR_HW, 316), WALL),
+    # south / north walls
+    box_brush((CORRIDOR_END, -_BAY_HW, -16), (ROOM_END, -_BAY_HW + 16, 316), WALL),
+    box_brush((CORRIDOR_END, _BAY_HW - 16, -16), (ROOM_END, _BAY_HW, 316), WALL),
+    # east wall around the hangar opening (left OPEN for now)
+    box_brush((ROOM_END - 16, -_BAY_HW, -16), (ROOM_END, -HANGAR_HW, 316), WALL),
+    box_brush((ROOM_END - 16, HANGAR_HW, -16), (ROOM_END, _BAY_HW, 316), WALL),
+    box_brush((ROOM_END - 16, -HANGAR_HW, HANGAR_H), (ROOM_END, HANGAR_HW, 316), WALL),
+]
+
+# Yard: an untextured open square (skybox later). The `skip` lid renders
+# nothing at runtime but seals the volume so `make bsp` (ericw-tools qbsp)
+# doesn't leak on the open sky. Its west wall is split around the same
+# HANGAR_* opening the bay's east wall has, abutting at ROOM_END.
+_YARD_W = ROOM_END              # yard west outer face
+_YARD_E = ROOM_END + 800        # yard east outer face
+YARD = [
+    box_brush((_YARD_W, -556, -16), (_YARD_E, 556, 0), FLOOR, tex_top=FLOOR),
+    box_brush((_YARD_W, -556, 360), (_YARD_E, 556, 376), "skip"),
+    box_brush((_YARD_E - 16, -556, -16), (_YARD_E, 556, 376), WALL),
+    box_brush((_YARD_W, -556, -16), (_YARD_E, -540, 376), WALL),
+    box_brush((_YARD_W, 540, -16), (_YARD_E, 556, 376), WALL),
+    # west wall around the hangar opening (matches the bay's east opening)
+    box_brush((_YARD_W, -556, -16), (_YARD_W + 16, -HANGAR_HW, 376), WALL),
+    box_brush((_YARD_W, HANGAR_HW, -16), (_YARD_W + 16, 556, 376), WALL),
+    box_brush((_YARD_W, -HANGAR_HW, HANGAR_H), (_YARD_W + 16, HANGAR_HW, 376), WALL),
+]
+
+WORLDSPAWN += CORRIDOR + BAY + YARD
 
 # Ladder brush: bolted to deck A's south face (y 64), 48 u wide, from the
 # floor to 16 u above the deck. Its own func_ladder entity so ladder.rs can
@@ -199,6 +298,65 @@ STACKING_CRATES = [
     _crate(536, -20),   # east of the base
 ]
 
+# --- props (Phase 10) --------------------------------------------------------
+#
+# The hinged door (`prop_door`, door.rs), the breakable wooden crate
+# (`prop_wood_crate`, breakable.rs) and two `item_pickup` models (items.rs).
+# Placed loose on the open floor a few metres east of spawn (y -256, x -448),
+# clear of both the ladder walk and the autopilot crate line — Phase 13 moves
+# them to where they belong (crate + crowbar onto platform B, door into the new
+# corridor). `prop_door` origin is the HINGE at floor level; `prop_wood_crate`
+# and `item_pickup` origins are the model centre, so z = size/2 rests them on
+# the floor (top z 0).
+
+
+def _door(x, y, face_yaw, locked=0, prompt="Open door"):
+    # `x` sits the ~0.08 m leaf just inside the near wall face (not the wall
+    # mid-line) so you don't see daylight around a thin leaf in a thick brush.
+    # `y` is the HINGE — on a jamb (`DOORWAY_HW`). `width`/`height` are DERIVED
+    # from the doorway hole so the leaf and the opening can't drift apart;
+    # `door.rs` then laps the leaf `DOOR_REBATE` over the frame on top of that.
+    return {"classname": "prop_door",
+            "origin": "%d %d 0" % (x, y),
+            "face_yaw": str(face_yaw), "locked": str(locked), "prompt": prompt,
+            "width": "%.4f" % (2 * DOORWAY_HW / _UPM),
+            "height": "%.4f" % (DOORWAY_H / _UPM)}
+
+
+def _wood_crate(x, y, contains, size=0.6, z_base=0,
+                prompt="Wooden crate — throw it to break it open"):
+    # origin is the cube centre; z_base is the surface it rests on (0 = floor,
+    # 192 = platform B deck top).
+    return {"classname": "prop_wood_crate",
+            "origin": "%d %d %d" % (x, y, z_base + round(size * _UPM / 2)),
+            "size": str(size), "contains": contains, "prompt": prompt}
+
+
+def _pickup(key, x, y, z):
+    return {"classname": "item_pickup", "origin": "%d %d %d" % (x, y, z), "item": key}
+
+
+# Phase 13 — the props in their real places, once Phase 10 verified the models
+# and the door swing on the spawn line:
+#
+#  * the locked `prop_door` fills the corridor doorway in the warehouse's east
+#    wall (the DOORWAY_* hole). Hinge on the north jamb (TB y = DOORWAY_HW),
+#    `face_yaw 0` so the closed leaf lies across the opening and swings east
+#    into the corridor, away from a player approaching from the warehouse.
+#    It's the ONLY door — pick it (Phase 16) and walk the corridor to the yard.
+#  * the wooden crate (holding the lockpick) and the crowbar sit on platform B
+#    (deck top z 192), reached only by the Phase 8 crate stack. Throw the crate
+#    off the deck onto the concrete to break it open — or crowbar it in place
+#    (Phase 16).
+#
+# No loose "lockpick" pickup any more — it only exists once the crate breaks.
+_DECK_B_TOP = 192
+PROPS = [
+    _door(643, DOORWAY_HW, face_yaw=0, locked=1, prompt="Open door"),
+    _wood_crate(392, 168, contains="lockpick", z_base=_DECK_B_TOP),
+    _pickup("crowbar", 452, 168, _DECK_B_TOP + 18),
+]
+
 # --- lighting (Phase 9) --------------------------------------------------
 #
 # The warehouse loads dark: `GlobalAmbientLight` at `config::AMBIENT_DARK`, no
@@ -228,8 +386,12 @@ def _lamp(x, y, z, targetname, **over):
 # the two decks, the y -224 row the open south floor. One lamp — over the
 # crate-stacking spot at platform B's foot — casts shadows, so a growing stack
 # reads as a growing shadow; the rest don't (keep the shadow-map count tiny).
+#
+# Phase 12: `start_on=1` — the warehouse now loads LIT. The platform-B switch
+# still toggles the whole "main_lights" circuit; it just starts on. (The dark
+# room is one flip away, and `IMMERSIVE_LIGHTS=toggle` now proves lit→dark→lit.)
 CEILING_LAMPS = [
-    _lamp(x, y, 512, "main_lights",
+    _lamp(x, y, 512, "main_lights", start_on=1,
           **({"shadows": 1} if (x, y) == (448, -224) else {}))
     for x in (-448, 0, 448)
     for y in (-224, 224)
@@ -238,8 +400,8 @@ CEILING_LAMPS = [
 # Aisle lamps seated on the deck underside (z 176) so the space beneath the
 # platforms isn't a black hole.
 AISLE_LAMPS = [
-    _lamp(-448, 256, 176, "main_lights", cone_deg=110),
-    _lamp(448, 256, 176, "main_lights", cone_deg=110),
+    _lamp(-448, 256, 176, "main_lights", start_on=1, cone_deg=110),
+    _lamp(448, 256, 176, "main_lights", start_on=1, cone_deg=110),
 ]
 
 # Pillar night lights: a bracket on the south face (y 112) of each of the four
@@ -259,7 +421,31 @@ PILLAR_NIGHT_LAMPS = [
           color="255 210 160", cone_deg=120, start_on=1),
 ]
 
-LAMPS = CEILING_LAMPS + AISLE_LAMPS + PILLAR_NIGHT_LAMPS
+# East-extension lamps. Their own `targetname` circuits, none of which the
+# platform-B switch drives, all `start_on=1` — the corridor and yard are places
+# you pass through, always lit.
+#
+# The corridor is only ~1.5 m wide and ~3 m tall, so a hanging `"down"` lamp
+# puts its shade at eye level and a bracket that aims *across* the corridor
+# reaches the centre line. These aim *along* the corridor (`aim "east"` /
+# `"west"`, TB +x/-x): `lights::spawn_fixtures` runs the arm parallel to the
+# wall and rakes the SpotLight down the length, so the shade hugs the wall near
+# the ceiling. Two of them, opposite walls, one washing each half.
+EXTENSION_LAMPS = [
+    _lamp(736, -CORRIDOR_HW, CORRIDOR_H - 10, "corridor", aim="east",
+          start_on=1, intensity=260000, cone_deg=120, color="255 235 200"),
+    _lamp(CORRIDOR_END - 80, CORRIDOR_HW, CORRIDOR_H - 10, "corridor", aim="west",
+          start_on=1, intensity=260000, cone_deg=120, color="255 235 200"),
+    # Bay: ceiling `"down"` lamps — the room is ~7.6 m tall, plenty of headroom.
+    _lamp(1320, -160, 300, "bay", start_on=1, cone_deg=110),
+    _lamp(1320, 160, 300, "bay", start_on=1, cone_deg=110),
+    _lamp(1600, 0, 300, "bay", start_on=1, cone_deg=110),
+    _lamp(_YARD_W + 260, -260, 340, "yard", start_on=1, color="220 230 255"),
+    _lamp(_YARD_W + 260, 260, 340, "yard", start_on=1, color="220 230 255"),
+    _lamp(_YARD_W + 620, 0, 340, "yard", start_on=1, color="220 230 255"),
+]
+
+LAMPS = CEILING_LAMPS + AISLE_LAMPS + PILLAR_NIGHT_LAMPS + EXTENSION_LAMPS
 
 # The wall switch. A 40 x 12 x 48 u `skip` box standing 12 u proud of platform
 # B's north wall (inner face y 448), centred at z 256 — 1.6 m above the deck
@@ -267,8 +453,10 @@ LAMPS = CEILING_LAMPS + AISLE_LAMPS + PILLAR_NIGHT_LAMPS
 # (the aim target); lights.rs draws a fixed-size lit panel + red PointLight
 # from the AABB (the func_ladder precedent).
 SWITCH_BRUSH = box_brush((396, 436, 232), (436, 448, 280), "skip")
+# Phase 12: `start_on=1` to match the now-lit ceiling bank. `lights.rs` picks
+# the initial prompt from this ("Turn off the lights").
 SWITCH_ENTITY = {"classname": "func_light_switch", "target": "main_lights",
-                 "prompt": "Turn on the lights", "start_on": "0"}
+                 "prompt": "Turn off the lights", "start_on": "1"}
 
 PLAYER_SPAWN = {"classname": "player_spawn", "origin": "-448 -256 48", "angle": "90"}
 # NB: no "angle" key — bevy_trenchbroom would read it as a brush rotation and
@@ -291,8 +479,12 @@ HEADER = """\
 // A tall warehouse (1280 x 896 x 512 u) with two raised platforms 512 u
 // apart. Platform A (west) carries a ladder to the floor; platform B (east)
 // has no ladder -- climb the pre-placed big crate at its south edge and stack
-// two loose crates on top. The room loads dark; a wall switch on platform B
-// turns the overhead lights on. See SPEC.md Phases 7, 8 and 9.
+// two loose crates on top. B holds a wooden crate (lockpick inside) and a
+// crowbar; throw the crate off the deck to break it. The room loads lit; a
+// wall switch on B still toggles the ceiling bank. A locked door in the east
+// wall opens onto a corridor -> bay room -> open yard (a large hangar-door
+// opening in the bay's far wall, un-doored for now).
+// See SPEC.md Phases 7-16.
 """
 
 
@@ -318,6 +510,8 @@ def build(with_light):
     parts.append(_entity(LADDER_ENTITY, LADDER_BRUSH))
     for crate in AUTOPILOT_CRATES + [BIG_CRATE] + STACKING_CRATES:
         parts.append(_entity(crate))
+    for prop in PROPS:
+        parts.append(_entity(prop))
     for lamp in LAMPS:
         parts.append(_entity(lamp))
     parts.append(_entity(SWITCH_ENTITY, SWITCH_BRUSH))

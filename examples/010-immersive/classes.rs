@@ -154,12 +154,85 @@ impl Default for LightFixture {
     }
 }
 
-/// A collectable. `pickup::spawn_visuals` gives it a placeholder emissive-cube
-/// mesh + sensor collider; swap for a glTF model later via the `model(...)`
-/// class attribute.
+/// A collectable. `pickup::spawn_visuals` looks `item` up in
+/// [`crate::items::CATALOGUE`] for a procedural model + colour (an unknown key
+/// falls back to the placeholder emissive cube), and adds a `Sensor` grab
+/// volume. Swap the model for a glTF `SceneRoot` later.
 #[point_class(base(Transform, Interactable))]
 #[derive(Default)]
 pub struct ItemPickup {
-    /// Inventory key, e.g. "keycard_blue".
+    /// Catalogue key, e.g. "lockpick" / "crowbar".
     pub item: String,
+}
+
+/// A hinged door — a "regular" swinging door, as opposed to the Quake
+/// [`FuncDoor`] slider. **A `point_class`, and its origin is the HINGE, not the
+/// leaf centre.** `door::spawn_swing_doors` builds the leaf as a child offset
+/// `+width/2` along local +X and swings the door by rotating *this entity's*
+/// `Transform` about +Y — which pivots about the hinge only because a point
+/// entity has a real `Transform`. A `solid_class` would have an identity
+/// `Transform` with its geometry baked in world space (the `FuncLightSwitch` /
+/// `FuncLadder` case), and rotating that pivots the door about the world
+/// origin. See SPEC.md Phase 10.
+#[point_class(base(Transform, Interactable))]
+pub struct PropDoor {
+    /// Leaf width in metres (hinge to latch).
+    pub width: f32,
+    /// Leaf height in metres.
+    pub height: f32,
+    /// Leaf thickness in metres.
+    pub thickness: f32,
+    /// Yaw in degrees the closed leaf points toward (hinge → latch), the Quake
+    /// way (0 = +X, 90 = +Y, ...). Deliberately **not** `angle` — the
+    /// [`FuncLadder::face_yaw`] trap. `door.rs` turns it into a rotation.
+    pub face_yaw: f32,
+    /// Degrees the leaf swings open; the sign picks the direction.
+    pub swing: f32,
+    /// Swing speed in degrees per second.
+    pub speed: f32,
+    /// Mechanically locked: E refuses to open it, and the lock plate glows red.
+    /// A lockpick clears it (Phase 16). A level author sets `"locked" "1"`.
+    pub locked: IntBool,
+}
+impl Default for PropDoor {
+    fn default() -> Self {
+        Self {
+            width: crate::config::DOOR_WIDTH,
+            height: crate::config::DOOR_HEIGHT,
+            thickness: crate::config::DOOR_THICKNESS,
+            face_yaw: 0.0,
+            swing: crate::config::DOOR_SWING_DEG,
+            speed: crate::config::DOOR_SPEED_DEG,
+            locked: IntBool(false),
+        }
+    }
+}
+
+/// A breakable wooden crate that holds one item. `breakable::spawn_wood_crates`
+/// gives it a `Dynamic` body light enough that `carry.rs` lifts and throws it
+/// unchanged — dropping it off a deck onto the concrete is the intended way to
+/// open it. When its `health` reaches zero it shatters into debris and spawns
+/// `contains` as an [`ItemPickup`]. See SPEC.md Phase 10.
+#[point_class(base(Transform, Interactable))]
+pub struct PropWoodCrate {
+    /// Cube edge length in metres.
+    pub size: f32,
+    /// Physical mass in kilograms. Must stay at or under
+    /// `config::CARRY_MAX_MASS` to remain liftable.
+    pub mass: f32,
+    /// Starting health, in the same units as `config::BREAK_*` /
+    /// `config::CROWBAR_DAMAGE`.
+    pub health: f32,
+    /// Catalogue key of the item spawned when it breaks, e.g. "lockpick".
+    pub contains: String,
+}
+impl Default for PropWoodCrate {
+    fn default() -> Self {
+        Self {
+            size: crate::config::WOOD_CRATE_SIZE,
+            mass: crate::config::WOOD_CRATE_MASS,
+            health: crate::config::WOOD_CRATE_HEALTH,
+            contains: String::new(),
+        }
+    }
 }

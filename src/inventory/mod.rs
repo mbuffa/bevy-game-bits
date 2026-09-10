@@ -129,12 +129,17 @@ pub mod config;
 pub mod drag;
 pub mod grid;
 pub mod items;
+pub mod quickbar;
 pub mod ui;
 
 use bevy::prelude::*;
 
 pub use commands::{AddItem, InventoryCommands, ResizeInventory};
 pub use config::{InventoryBoardSpec, InventoryConfig, InventoryLayout, InventoryTheme, PanelSide};
+pub use quickbar::{
+    hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin, QuickbarSet,
+    QuickbarStyle,
+};
 pub use drag::{
     begin_drag, end_drag, quick_transfer, reset_interaction, track_cursor, track_drag_target,
     update_drag, InventoryAction, InventoryClicks, InventoryCursor, InventoryDragState,
@@ -160,6 +165,10 @@ pub mod prelude {
         InventoryLayout, InventoryParts, InventoryPlugin, InventoryPreview, InventoryRoot,
         InventorySelection, InventorySet, InventorySlot, InventoryTheme, InventoryTransferTarget,
         InventoryWindow, PanelSide, ResizeInventory,
+    };
+    pub use super::quickbar::{
+        hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin,
+        QuickbarSet, QuickbarStyle,
     };
 }
 

@@ -28,14 +28,23 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 use bevy::render::view::window::screenshot::{save_to_disk, Screenshot};
+use bevy::ui::RelativeCursorPosition;
 use bevy_ahoy::input::AccumulatedInput;
 use bevy_ahoy::prelude::*;
+use bevy_ahoy::CharacterLook;
+use bevy_game_bits::inventory::prelude::{
+    ActiveSlot, InventoryConfig, InventoryGrid, InventoryWindow, Quickbar, QuickbarParts,
+};
+use bevy_game_bits::inventory::{AddItem, InventoryItem};
 
+use crate::breakable::Breakable;
 use crate::carry::{Carried, Carrying, ThrowCharge};
-use crate::classes::PropCrate;
+use crate::classes::{ItemPickup, PropCrate, PropWoodCrate};
 use crate::config::{self, AutopilotStep};
-use crate::interact::InteractionFocus;
+use crate::door::DoorSwing;
+use crate::interact::{Interacted, InteractionFocus};
 use crate::ladder::Climbing;
+use crate::pickup::PlayerPack;
 
 pub fn env_flag(name: &str) -> bool {
     std::env::var(name).map(|v| v == "1").unwrap_or(false)
@@ -73,6 +82,280 @@ pub fn auto_toggle_switch(
         info!("devtools: auto-toggling light switch {switch}");
         commands.trigger(crate::interact::Interacted { entity: switch });
         *done = true;
+    }
+}
+
+/// `IMMERSIVE_PROPS` (Phase 10): exercise the hinged door and the breakable
+/// crate without a keyboard, the same way `IMMERSIVE_LIGHTS=toggle` exercises
+/// the switch. `=door` fires `Interacted` at every `prop_door` twice (open ~2.5
+/// s in, close ~7 s in) — read the swing in `IMMERSIVE_TELEMETRY`'s
+/// `doors(open=...)`. `=break` zeroes every wooden crate's health once, ~2.5 s
+/// in, so `shatter` runs and the telemetry `wood_crates` count drops to 0 as
+/// `pickups` rises — the shattered crate's contained item appearing on the
+/// floor. `=locked` fires `Interacted` at every door once and expects the
+/// prompt to read "Locked" and the door not to move. There is only one door
+/// now (the locked one), so `=door` and `=locked` behave the same. `=pick`
+/// (Phase 16) warps to the door, hands the player an active lockpick, holds the
+/// real `MouseButton::Left` (`press_use_key`) to pick the lock, fires
+/// `Interacted` to open it, then walks into the corridor for a lighting shot —
+/// telemetry `doors(... locked=1)` → `locked=0` → `open=1/1`.
+pub fn props_mode() -> Option<String> {
+    std::env::var("IMMERSIVE_PROPS").ok()
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn exercise_props(
+    mode: Res<PropsMode>,
+    doors: Query<Entity, With<DoorSwing>>,
+    mut breakables: Query<&mut Breakable>,
+    // `CharacterLook` is `#[require]`d onto the *player* (the relationship
+    // target of `CharacterControllerCamera`), not the camera entity.
+    mut player: Query<(&mut Transform, &mut CharacterLook), With<CharacterController>>,
+    // ...and the camera transform must be pinned too: ahoy's
+    // `copy_camera_to_character_look` re-derives `CharacterLook` from the
+    // camera every frame and would otherwise clobber the look write before
+    // `copy_character_look_to_camera` applies it (an unordered-system race).
+    mut camera: Query<
+        &mut Transform,
+        (With<CharacterControllerCameraOf>, Without<CharacterController>),
+    >,
+    pack: Option<Res<PlayerPack>>,
+    mut add_item: MessageWriter<AddItem>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    let at_door = matches!(mode.0.as_str(), "door" | "locked" | "pick");
+
+    // Warp + hold the view down the east extension so the screenshots actually
+    // frame what this devtool exercises. Bevy: the east-wall doorway is at
+    // z ≈ -16.5, centred on x ≈ 0; -Z (yaw 0) faces it (and the bay / yard
+    // beyond). `pick` walks it in stages so each junction is captured clean:
+    //   90–235   2 m in front of the door
+    //   236–299  a few metres into the (now-open) corridor
+    //   300–420  into the bay, facing the large yard opening
+    if at_door && (90..420).contains(&*frame) {
+        let z = match (mode.0.as_str(), *frame) {
+            ("pick", f) if f >= 300 => -40.0,
+            ("pick", f) if f >= 236 => -22.0,
+            _ => -14.2,
+        };
+        let facing = Quat::from_euler(EulerRot::YXZ, 0.0, -0.10, 0.0);
+        if let Ok((mut t, mut look)) = player.single_mut() {
+            t.translation = Vec3::new(0.0, 1.0, z);
+            (look.yaw, look.pitch) = (0.0, -0.10);
+        }
+        if let Ok(mut cam_t) = camera.single_mut() {
+            cam_t.rotation = facing;
+        }
+        if *frame == 90 {
+            info!("devtools: warped + holding player at the corridor door");
+        } else if *frame == 300 && mode.0 == "pick" {
+            info!("devtools: warped player into the bay for the far-junction shot");
+        } else if *frame == 236 && mode.0 == "pick" {
+            info!("devtools: warped player into the corridor for the light shot");
+        }
+    }
+
+    // `pick` (Phase 16): add a lockpick to the pack (it auto-fills quickbar
+    // slot 0), then press the real `Digit1` to make it active — so the whole
+    // pickup → grid → quickbar → `Use` path is exercised, not just a resource
+    // poke. `press_use_key` (PreUpdate) then LMBs the lock, then E opens it.
+    if mode.0 == "pick" {
+        if *frame == 95 {
+            if let (Some(pack), Some(def)) = (&pack, crate::items::lookup("lockpick")) {
+                add_item.write(AddItem {
+                    board: ***pack,
+                    item: InventoryItem::new(def.name, def.description, def.cells, def.color),
+                    origin: None,
+                });
+                info!("devtools: added a lockpick to the pack");
+            }
+        }
+        if *frame == 108 {
+            keys.press(KeyCode::Digit1);
+        }
+        if *frame == 114 {
+            keys.release(KeyCode::Digit1);
+            info!("devtools: selected quickbar slot 1");
+        }
+    }
+
+    match (mode.0.as_str(), *frame) {
+        ("door", 150) | ("door", 420) | ("locked", 150) | ("pick", 210) => {
+            for door in &doors {
+                info!("devtools: firing Interacted at door {door}");
+                commands.trigger(Interacted { entity: door });
+            }
+        }
+        ("break", 150) => {
+            for mut breakable in &mut breakables {
+                info!("devtools: zeroing a breakable's health");
+                breakable.health = -1.0;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `IMMERSIVE_PROPS=pick`: hold the real `MouseButton::Left` for a window
+/// (frames 130–150) so the whole `Use` binding → `Press` → `Fire<Use>` →
+/// `use_item::fire_use` path is under test — the same "press the real key, not
+/// the action" principle as `autopilot_drive`. `PreUpdate`, between
+/// `bevy::input::InputSystems` and `EnhancedInputSystems::Update`.
+pub fn press_use_key(mut mouse: ResMut<ButtonInput<MouseButton>>, mut frame: Local<u32>) {
+    *frame += 1;
+    if (130..150).contains(&*frame) {
+        mouse.press(MouseButton::Left);
+    } else {
+        mouse.release(MouseButton::Left);
+    }
+}
+
+/// Holds `IMMERSIVE_PROPS`'s value between the startup check and `exercise_props`.
+#[derive(Resource)]
+pub struct PropsMode(pub String);
+
+/// `IMMERSIVE_INVENTORY` (Phases 14–16): keyboard-free checks for the grid pack
+/// and the quickbar, since synthetic OS input is blocked on this Mac.
+/// - `open` — presses the real `Tab`, so the whole
+///   `player::player_cursor_input` → `InventoryWindow` → `sync_cursor_mode`
+///   path runs; screenshots the board over the 3D scene, and telemetry shows
+///   `pack(open=true)` with the player's look frozen.
+/// - `use` — adds a lockpick to the pack (auto-fills quickbar slot 1), selects
+///   it (real `Digit1`), warps to the locked door and holds real LMB: proves
+///   the **consume** path — `pack(items=1 → 0)`, `doors(locked=1 → 0)`.
+/// - `drag` — opens the pack and hand-drives a drag of the crowbar tile onto
+///   quickbar slot 4 (writing `RelativeCursorPosition` after
+///   `ui_focus_system`), so `quickbar::quickbar_drop` is exercised in-app.
+pub fn inventory_mode() -> Option<String> {
+    std::env::var("IMMERSIVE_INVENTORY").ok()
+}
+
+/// Holds `IMMERSIVE_INVENTORY`'s value.
+#[derive(Resource)]
+pub struct InventoryMode(pub String);
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn exercise_inventory(
+    mode: Res<InventoryMode>,
+    pack: Option<Res<PlayerPack>>,
+    mut add_item: MessageWriter<AddItem>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut player: Query<(&mut Transform, &mut CharacterLook), With<CharacterController>>,
+    mut camera: Query<
+        &mut Transform,
+        (With<CharacterControllerCameraOf>, Without<CharacterController>),
+    >,
+    boards: Query<(&InventoryConfig, &Quickbar, &QuickbarParts)>,
+    items: Query<(Entity, &InventoryItem, &bevy_game_bits::inventory::InventorySlot)>,
+    mut rels: Query<&mut RelativeCursorPosition>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    let Some(pack) = pack.as_ref() else {
+        return;
+    };
+    let board = ***pack;
+
+    // Stock the pack up-front for every mode.
+    if *frame == 60 {
+        for key in ["lockpick", "crowbar"] {
+            if let Some(def) = crate::items::lookup(key) {
+                add_item.write(AddItem {
+                    board,
+                    item: InventoryItem::new(def.name, def.description, def.cells, def.color),
+                    origin: None,
+                });
+            }
+        }
+        info!("devtools: stocked the pack with a lockpick and a crowbar");
+    }
+
+    match mode.0.as_str() {
+        "open" => {
+            if *frame == 100 || *frame == 260 {
+                keys.press(KeyCode::Tab);
+            } else {
+                keys.release(KeyCode::Tab);
+            }
+        }
+        "use" => {
+            if *frame == 110 {
+                keys.press(KeyCode::Digit1);
+            } else if *frame == 116 {
+                keys.release(KeyCode::Digit1);
+            }
+            // Warp + hold at the locked door (same geometry as exercise_props).
+            if (90..320).contains(&*frame) {
+                if let Ok((mut t, mut look)) = player.single_mut() {
+                    t.translation = Vec3::new(0.0, 1.0, -14.2);
+                    (look.yaw, look.pitch) = (0.0, -0.10);
+                }
+                if let Ok(mut cam_t) = camera.single_mut() {
+                    cam_t.rotation = Quat::from_euler(EulerRot::YXZ, 0.0, -0.10, 0.0);
+                }
+            }
+            // Hold LMB to pick the lock.
+            if (150..175).contains(&*frame) {
+                mouse.press(MouseButton::Left);
+            } else {
+                mouse.release(MouseButton::Left);
+            }
+        }
+        "drag" => {
+            // Open the pack, then drive a synthetic drag of the crowbar tile
+            // (grid origin (0,0)) onto quickbar slot 4.
+            if *frame == 100 {
+                keys.press(KeyCode::Tab);
+            } else {
+                keys.release(KeyCode::Tab);
+            }
+            let Ok((config, _, parts)) = boards.get(board) else {
+                return;
+            };
+            let crowbar = items
+                .iter()
+                .find(|(_, item, _)| item.name == "Crowbar")
+                .map(|(_, _, slot)| slot.0);
+
+            let write_rel = |rels: &mut Query<&mut RelativeCursorPosition>,
+                             entity: Entity,
+                             over: bool,
+                             normalized: Vec2| {
+                if let Ok(mut rel) = rels.get_mut(entity) {
+                    rel.cursor_over = over;
+                    rel.normalized = Some(normalized);
+                }
+            };
+
+            if let Some(origin) = crowbar {
+                let cell_center = (origin.as_vec2() + Vec2::splat(0.5)) * config.cell_px;
+                let board_norm = cell_center / config.board_size() - Vec2::splat(0.5);
+                let slot_norm = Vec2::new((4.0 + 0.5) / config::QUICKBAR_SLOTS as f32 - 0.5, 0.0);
+
+                match *frame {
+                    150 => {
+                        write_rel(&mut rels, board, true, board_norm);
+                        mouse.press(MouseButton::Left);
+                    }
+                    151..=158 => {
+                        write_rel(&mut rels, board, false, Vec2::splat(5.0));
+                        write_rel(&mut rels, parts.root, true, slot_norm);
+                    }
+                    159 => {
+                        write_rel(&mut rels, board, false, Vec2::splat(5.0));
+                        write_rel(&mut rels, parts.root, true, slot_norm);
+                        mouse.release(MouseButton::Left);
+                        info!("devtools: released a drag of the crowbar onto quickbar slot 4");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -282,6 +565,10 @@ pub fn telemetry(
     crates: Query<(&Transform, Option<&LinearVelocity>, &PropCrate), Without<Carried>>,
     fixtures: Query<&crate::lights::Powered>,
     switches: Query<&crate::lights::SwitchState>,
+    doors: Query<&DoorSwing>,
+    wood_crates: Query<&Breakable, With<PropWoodCrate>>,
+    pickups: Query<(), With<ItemPickup>>,
+    packs: Query<(&Quickbar, &ActiveSlot, &InventoryGrid, &InventoryWindow)>,
     focus: Res<InteractionFocus>,
     time: Res<Time>,
     mut since_last: Local<f32>,
@@ -320,10 +607,30 @@ pub fn telemetry(
     let lamps_on = fixtures.iter().filter(|p| p.0).count();
     let lamps_total = fixtures.iter().count();
     let switches_on = switches.iter().filter(|s| s.0).count();
+    let doors_total = doors.iter().count();
+    let doors_open = doors.iter().filter(|d| d.is_open()).count();
+    let doors_locked = doors.iter().filter(|d| d.locked).count();
+    let wood_crates = wood_crates.iter().count();
+    let pickups = pickups.iter().count();
+    let pack = packs
+        .iter()
+        .next()
+        .map(|(quickbar, active, grid, window)| {
+            let filled = quickbar.slots.iter().filter(|s| s.is_some()).count();
+            format!(
+                "pack(items={} free={} open={} active={:?})",
+                filled,
+                grid.free_cells(),
+                window.open,
+                active.0
+            )
+        })
+        .unwrap_or_default();
     for (transform, state, climbing, carrying, charge) in &player {
         info!(
             "telemetry: pos={:?} grounded={} climbing={} carrying={} charge={:.2} \
-             crates(n={} max_y={:.2} moving={}) lights={}/{} switches_on={} focus={:?} cam_yaw_pitch={:?}",
+             crates(n={} max_y={:.2} moving={}) lights={}/{} switches_on={} \
+             doors(open={}/{} locked={}) wood_crates={} pickups={} {pack} focus={:?} cam_yaw_pitch={:?}",
             transform.translation,
             state.grounded.is_some(),
             climbing.is_some(),
@@ -335,19 +642,40 @@ pub fn telemetry(
             lamps_on,
             lamps_total,
             switches_on,
+            doors_open,
+            doors_total,
+            doors_locked,
+            wood_crates,
+            pickups,
             focus.0.as_ref().map(|(_, prompt)| prompt.as_str()),
             cam,
         );
     }
 }
 
-/// Three shots, each fired once. One a fixed couple of seconds in (the
-/// warehouse and its ladder in view during the approach). One the first frame
-/// the player is locked on and clear of the floor (`Climbing` + `y > 2.5`) —
-/// the acceptance shot for the ladder standoff: the rungs must fill the frame
-/// at arm's length, which telemetry can't show. One the first frame the player
-/// is standing on a platform after the climb. The last two are keyed on state,
-/// not a frame number, since the climb's duration drifts with FPS.
+/// Which one-shot screenshots have already fired. One bundled `Local` so the
+/// system stays under the parameter cap.
+#[derive(Default)]
+pub struct Shots {
+    lock_view: bool,
+    on_platform: bool,
+    carrying: bool,
+    platform_b: bool,
+    lights_dark: bool,
+    lights_lit: bool,
+    door: bool,
+    door_unlocked: bool,
+    corridor: bool,
+    bay: bool,
+    pack_open: bool,
+    viewmodel: bool,
+    quickbar_drag: bool,
+}
+
+/// State- and frame-gated screenshots, each fired once. The ladder-standoff
+/// and on-platform shots are keyed on state (their timing drifts with FPS);
+/// the corridor/bay/inventory shots are frame-gated to the matching devtool
+/// run.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn take_screenshot(
     mut commands: Commands,
@@ -361,13 +689,9 @@ pub fn take_screenshot(
         With<CharacterController>,
     >,
     switches: Query<&crate::lights::SwitchState>,
+    windows: Query<&InventoryWindow>,
     mut frame: Local<u32>,
-    mut lock_view_done: Local<bool>,
-    mut on_platform_done: Local<bool>,
-    mut carrying_done: Local<bool>,
-    mut platform_b_done: Local<bool>,
-    mut lights_dark_done: Local<bool>,
-    mut lights_lit_done: Local<bool>,
+    mut done: Local<Shots>,
 ) {
     *frame += 1;
     if *frame == 120 {
@@ -379,35 +703,106 @@ pub fn take_screenshot(
     }
     // Phase 9: the dark room (a fixed early frame) and the lit room (the first
     // frame any switch reads on).
-    if !*lights_dark_done && *frame == 90 {
-        *lights_dark_done = true;
+    if !done.lights_dark && *frame == 90 {
+        done.lights_dark = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
                 "screenshots/010-immersive/260909-warehouse-dark.png",
             ));
     }
-    if !*lights_lit_done && switches.iter().any(|s| s.0) {
-        *lights_lit_done = true;
+    if !done.lights_lit && switches.iter().any(|s| s.0) {
+        done.lights_lit = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
                 "screenshots/010-immersive/260909-warehouse-lit.png",
             ));
     }
+    // `IMMERSIVE_INVENTORY`: the grid pack open over the 3D scene.
+    if !done.pack_open && *frame > 60 && windows.iter().any(|w| w.open) {
+        done.pack_open = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk("screenshots/010-immersive/260910-pack-open.png"));
+    }
+    // `IMMERSIVE_INVENTORY=drag`: after the synthetic drag onto slot 4 lands.
+    if !done.quickbar_drag && *frame == 175 && windows.iter().any(|w| w.open) {
+        done.quickbar_drag = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260910-quickbar-drag.png",
+            ));
+    }
+    // `IMMERSIVE_INVENTORY=use`: the lockpick in hand (selected ~frame 116,
+    // spent ~frame 151).
+    if !done.viewmodel && *frame == 140 {
+        done.viewmodel = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk("screenshots/010-immersive/260910-viewmodel.png"));
+    }
     let Ok((transform, state, climbing, carrying)) = player.single() else {
         return;
     };
-    if !*lock_view_done && climbing.is_some() && transform.translation.y > 2.5 {
-        *lock_view_done = true;
+    // In front of the east-wall corridor door (the `IMMERSIVE_PROPS` warp
+    // parks the player here) — the shot for the door's fit in its frame.
+    let at_corridor_door = transform.translation.x.abs() < 2.0
+        && (-15.5..-12.0).contains(&transform.translation.z);
+    if !done.door && *frame > 140 && at_corridor_door {
+        done.door = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260909-corridor-door.png",
+            ));
+    }
+    // `IMMERSIVE_PROPS=pick`: after the LMB window (frames 130–150) and before
+    // the E-open (frame 210) — the door still shut but its lock plate green.
+    if !done.door_unlocked && *frame == 190 && at_corridor_door {
+        done.door_unlocked = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260910-door-unlocked.png",
+            ));
+    }
+    // `IMMERSIVE_PROPS=pick`: warped a few metres into the corridor (z ≈ -22)
+    // after the door opened — the wall-bracket lighting + a clean ceiling all
+    // the way to the bay.
+    if !done.corridor
+        && *frame == 280
+        && transform.translation.x.abs() < 2.0
+        && (-25.0..-19.0).contains(&transform.translation.z)
+    {
+        done.corridor = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk("screenshots/010-immersive/260910-corridor.png"));
+    }
+    // `IMMERSIVE_PROPS=pick`: warped into the bay (z ≈ -40) facing the large
+    // yard opening — both new junctions (corridor→bay, bay→yard) in one frame.
+    if !done.bay
+        && *frame == 380
+        && transform.translation.x.abs() < 2.0
+        && (-45.0..-35.0).contains(&transform.translation.z)
+    {
+        done.bay = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk("screenshots/010-immersive/260910-bay.png"));
+    }
+    if !done.lock_view && climbing.is_some() && transform.translation.y > 2.5 {
+        done.lock_view = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
                 "screenshots/010-immersive/260908-ladder-lock-view.png",
             ));
     }
-    if !*on_platform_done && state.grounded.is_some() && transform.translation.y > 3.0 {
-        *on_platform_done = true;
+    if !done.on_platform && state.grounded.is_some() && transform.translation.y > 3.0 {
+        done.on_platform = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
@@ -415,8 +810,8 @@ pub fn take_screenshot(
             ));
     }
     // Phase 8: the ghost crate at arm's length + charge slider.
-    if !*carrying_done && carrying.is_some() {
-        *carrying_done = true;
+    if !done.carrying && carrying.is_some() {
+        done.carrying = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
@@ -424,8 +819,8 @@ pub fn take_screenshot(
             ));
     }
     // Phase 8: standing on platform B (deck top 4.88 m) after a crate stack.
-    if !*platform_b_done && state.grounded.is_some() && transform.translation.y > 4.5 {
-        *platform_b_done = true;
+    if !done.platform_b && state.grounded.is_some() && transform.translation.y > 4.5 {
+        done.platform_b = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(

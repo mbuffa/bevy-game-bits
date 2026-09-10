@@ -343,10 +343,164 @@ pub const LADDER_COLOR: Color = Color::srgb(0.55, 0.55, 0.58);
 
 // --- Pickups -----------------------------------------------------------------
 
-/// Edge length (meters) of the placeholder pickup cube.
+/// Edge length (meters) of the placeholder pickup cube (an item key with no
+/// [`crate::items`] catalogue entry).
 pub const PICKUP_SIZE: f32 = 0.3;
 pub const PICKUP_COLOR: Color = Color::srgb(1.0, 0.8, 0.15);
 pub const PICKUP_EMISSIVE: LinearRgba = LinearRgba::rgb(1.5, 1.0, 0.1);
+
+/// Every pickup — whatever its model's real size — gets a cube collider this
+/// wide as its aim/grab volume, so a 0.1 m lockpick is as easy to put the
+/// crosshair on as a crate. `Sensor`, so it never blocks movement (the
+/// `pickup.rs` precedent, and the ladder's oversized grab volume).
+pub const PICKUP_GRAB_SIZE: f32 = 0.24;
+
+/// Fraction of an item's base colour mixed into its `emissive`, so a small
+/// prop still reads against a lit floor and catches the eye. Not so high it
+/// looks like it's glowing.
+pub const PICKUP_GLOW: f32 = 0.35;
+
+// --- Doors (prop_door) -----------------------------------------------------
+//
+// A hinged door (Phase 10), distinct from the Quake `FuncDoor` slider. It's a
+// `point_class` whose origin is the HINGE: `door::spawn_swing_doors` rotates
+// the entity's own `Transform` about +Y to swing it, which only pivots about
+// the right point because a point entity's `Transform` is real (a solid
+// entity's is identity, geometry baked in world space — the switch/ladder
+// case). See SPEC.md Phase 10.
+
+/// Default leaf width / height (metres), the fallback when a `prop_door` is
+/// placed with no `width`/`height` keys. A door in a `gen_map.py` doorway
+/// instead gets its size **derived from the hole** (`2 * DOORWAY_HW / _UPM`,
+/// `DOORWAY_H / _UPM`), so the leaf and the opening can't drift apart.
+pub const DOOR_WIDTH: f32 = 1.12;
+pub const DOOR_HEIGHT: f32 = 2.29;
+/// Default leaf thickness (metres).
+pub const DOOR_THICKNESS: f32 = 0.08;
+/// How far (metres) the closed leaf laps over its frame on the hinge side, the
+/// latch side and the head — a doorstop rebate. `spawn_swing_doors` builds the
+/// leaf mesh + collider `2 * DOOR_REBATE` wider and `DOOR_REBATE` taller than
+/// `width`/`height` and shifts it toward the hinge, so there is never a visible
+/// gap around the leaf however the doorway rounds. The leaf's bottom still
+/// rests on the floor. The kinematic leaf collider overlapping the static
+/// jamb/lintel colliders is harmless (kinematic wins; it swings clear on open).
+pub const DOOR_REBATE: f32 = 0.02;
+/// Default degrees the leaf swings when opened; the class field's sign picks
+/// the direction.
+pub const DOOR_SWING_DEG: f32 = 95.0;
+/// Default swing speed (degrees/second). Brisk — a corridor door, not a
+/// blast door.
+pub const DOOR_SPEED_DEG: f32 = 200.0;
+
+/// Painted-wood leaf colour.
+pub const DOOR_COLOR: Color = Color::srgb(0.42, 0.30, 0.19);
+/// Lever-handle metal colour.
+pub const DOOR_HANDLE_COLOR: Color = Color::srgb(0.72, 0.66, 0.42);
+/// Lock-plate emissive while the door is mechanically locked — red, HDR for
+/// `Bloom`, held under white so it stays red across the room (the
+/// `SWITCH_OFF_EMISSIVE` precedent).
+pub const DOOR_LOCK_LOCKED_EMISSIVE: LinearRgba = LinearRgba::rgb(5.0, 0.12, 0.05);
+/// Lock-plate emissive once the lock is picked — green.
+pub const DOOR_LOCK_OPEN_EMISSIVE: LinearRgba = LinearRgba::rgb(0.12, 4.5, 0.4);
+
+/// Interact prompt on a hinged door, per state. `door.rs` mutates the existing
+/// `Interactable::prompt`, exactly as `lights.rs` does for the switch.
+pub const DOOR_PROMPT_OPEN: &str = "Open door";
+pub const DOOR_PROMPT_CLOSE: &str = "Close door";
+pub const DOOR_PROMPT_LOCKED: &str = "Locked — needs a lockpick";
+
+// --- Breakables (prop_wood_crate) ----------------------------------------
+//
+// A wooden crate that holds an item. Spawned Dynamic and light so `carry.rs`
+// lifts and throws it with no changes (the grab gate is body-type + mass, and
+// never checks for `PropCrate`). Throwing it off platform B onto the concrete
+// is the intended way to open it; the crowbar (Phase 16) is the shortcut.
+// See SPEC.md Phase 10.
+
+/// Default wooden-crate edge length (metres). Smaller than a metal
+/// `CRATE_SIZE` crate so it reads as different at a glance.
+pub const WOOD_CRATE_SIZE: f32 = 0.6;
+/// Default wooden-crate `Mass` (kg). Well under `CARRY_MAX_MASS` — it must
+/// stay liftable or the throw-to-break beat is dead.
+pub const WOOD_CRATE_MASS: f32 = 12.0;
+/// Default wooden-crate health, in the same arbitrary units as the damage
+/// constants below.
+pub const WOOD_CRATE_HEALTH: f32 = 100.0;
+/// Wooden-crate plank colour.
+pub const WOOD_COLOR: Color = Color::srgb(0.5, 0.36, 0.22);
+
+/// Contact Δv (m/s) below which an impact does no damage at all — a hand
+/// placement, a nudge, or the crate resting on the floor (which applies a tiny
+/// support impulse every step) all live under here. The `vehicle::impact`
+/// `min_delta_v` idea.
+pub const BREAK_MIN_DELTA_V: f32 = 6.0;
+/// Damage per m/s of contact Δv *past* [`BREAK_MIN_DELTA_V`]. Tuned so a drop
+/// off platform B (deck top 4.88 m → ~16.8 m/s at the floor) shatters a
+/// full-health crate in one hit and a 12 m/s throw into a wall also breaks it.
+pub const BREAK_DAMAGE_PER_DELTA_V: f32 = 22.0;
+/// Damage one crowbar swing deals to a `Breakable`. Under [`WOOD_CRATE_HEALTH`]
+/// so it takes more than one hit. Read by the "use active item" verb
+/// (`use_item::fire_use`).
+pub const CROWBAR_DAMAGE: f32 = 55.0;
+
+/// How many debris cubes a shattered crate throws off.
+pub const DEBRIS_COUNT: usize = 7;
+/// Debris cube edge length (metres).
+pub const DEBRIS_SIZE: f32 = 0.12;
+/// Outward speed (m/s) debris leaves the break at.
+pub const DEBRIS_SPEED: f32 = 2.4;
+/// Seconds before a debris cube despawns (`breakable::despawn_after`).
+pub const DEBRIS_LIFETIME: f32 = 5.0;
+
+// --- Inventory & quickbar (Phase 14 / 15) --------------------------------
+//
+// `main.rs::spawn_pack` builds one `src/inventory/` board as the player's
+// pack (opened with `Tab`, centred, `InventoryWindow { open: false }`) and
+// hangs a `QuickbarPlugin` strip off it. The grid holds the real items; the
+// quickbar is a row of pointers into that grid — picking an item up puts it
+// in the grid first (the board must have room), then the strip records it.
+
+/// Pack grid size (cells). Small — this is a demo pack, not a survival game's.
+pub const INVENTORY_COLS: u32 = 6;
+pub const INVENTORY_ROWS: u32 = 5;
+/// Pixels per cell for the pack board.
+pub const INVENTORY_CELL_PX: f32 = 56.0;
+
+/// Number of quickbar slots — keys `1`–`9` then `0`.
+pub const QUICKBAR_SLOTS: usize = 10;
+
+/// Shown briefly (top centre) when a pickup can't be collected because the
+/// pack is full — the pickup is left in the world, not destroyed.
+pub const PACK_FULL_MSG: &str = "Pack is full";
+/// Seconds the "pack is full" notice stays up after a rejected pickup.
+pub const PACK_FULL_SECS: f32 = 2.0;
+
+// --- Viewmodel (Phase 16) -----------------------------------------------
+//
+// The active quickbar item, drawn in the player's hands: an
+// `items::item_mesh` hung off the camera, bottom-right, swapped when the
+// active slot changes and hidden when the hands are free / carrying a crate /
+// climbing / the pack is open. `viewmodel.rs`.
+
+/// Local offset (metres, camera space: +x right, +y up, -z forward) the
+/// viewmodel sits at — low-right, but far enough in frame to actually read.
+pub const VIEWMODEL_OFFSET: Vec3 = Vec3::new(0.15, -0.17, -0.45);
+/// Uniform scale applied to `item_mesh` — the world models are hand-sized
+/// (a 12 cm lockpick, a 60 cm crowbar), so a viewmodel wants them a few times
+/// bigger to actually read as "in hand".
+pub const VIEWMODEL_SCALE: f32 = 2.6;
+/// Euler (YXZ, radians) the held mesh is tilted by, so the tool angles into
+/// view instead of lying flat and edge-on to the camera.
+pub const VIEWMODEL_TILT: Vec3 = Vec3::new(0.6, -0.55, 0.2);
+/// Fraction of the item's base colour mixed into its viewmodel `emissive`, so
+/// the held tool stays readable with the warehouse lights off.
+pub const VIEWMODEL_GLOW: f32 = 0.5;
+/// Peak view-bob displacement (metres) at full walking speed; scales linearly
+/// down to nothing at a standstill.
+pub const VIEWMODEL_BOB_AMPLITUDE: f32 = 0.014;
+/// View-bob frequency (Hz) — the vertical bob is twice this (a footfall per
+/// half-cycle).
+pub const VIEWMODEL_BOB_HZ: f32 = 1.4;
 
 // --- Devtools ------------------------------------------------------------
 
