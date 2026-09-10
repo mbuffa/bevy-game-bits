@@ -4,6 +4,7 @@
 //! drop in. Mechanics start life inside an example, and move here once a
 //! second consumer proves what's actually general about them.
 
+pub mod audio;
 pub mod inventory;
 pub mod jump;
 pub mod vehicle;

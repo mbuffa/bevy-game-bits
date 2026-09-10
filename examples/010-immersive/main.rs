@@ -28,6 +28,7 @@ mod classes;
 mod config;
 mod devtools;
 mod door;
+mod footsteps;
 mod input;
 mod interact;
 mod items;
@@ -69,6 +70,8 @@ fn main() {
     // `spawn_pack` builds the one board with a non-default spec and keeps its
     // entity in `pickup::PlayerPack`.
     .add_plugins((InventoryPlugin::headless(), QuickbarPlugin))
+    // One-shot SFX plumbing (footsteps, landings, ladder rungs — `footsteps.rs`).
+    .add_plugins(bevy_game_bits::audio::SfxPlugin)
     .add_input_context::<input::PlayerInput>()
     // Seeds the lit state (Phase 12 — the warehouse now loads with the main
     // lights on). `lights::sync_ambient` owns it from the first frame: it
@@ -111,6 +114,7 @@ fn main() {
             lights::setup_lamp_assets,
             door::setup_door_assets,
             breakable::setup_breakable_assets,
+            footsteps::load_footstep_clips,
             ui::setup_hud,
         ),
     )
@@ -157,9 +161,19 @@ fn main() {
     )
     .add_systems(
         FixedPostUpdate,
-        ladder::climb
-            .after(AhoySystems::MoveCharacters)
-            .before(PhysicsSystems::First),
+        (
+            // Sample the fall speed before ahoy grounds the body and zeroes
+            // `velocity.y`, or every landing thump reads as 0 m/s.
+            footsteps::stash_fall_speed.before(AhoySystems::MoveCharacters),
+            ladder::climb
+                .after(AhoySystems::MoveCharacters)
+                .before(PhysicsSystems::First),
+            // After the climb's absolute position write, so a ladder step is
+            // visible as a `Transform` delta.
+            footsteps::advance_footsteps
+                .after(AhoySystems::MoveCharacters)
+                .after(ladder::climb),
+        ),
     );
 
     if std::env::var("IMMERSIVE_LIGHTS").as_deref() == Ok("toggle") {
@@ -219,6 +233,9 @@ fn main() {
     }
     if devtools::env_flag("IMMERSIVE_SHOTS") {
         app.add_systems(Update, devtools::take_screenshot);
+    }
+    if devtools::audio_log() {
+        app.add_systems(Update, devtools::log_sfx);
     }
 
     trenchbroom::register_classes(&mut app);

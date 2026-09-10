@@ -123,31 +123,39 @@ pub fn sync_viewmodel(
     }
 }
 
-/// A subtle view bob, scaled by the player's ground speed. Pure so it can be
-/// unit-tested — the vertical bob dips once per footfall (period `1/HZ`), the
-/// horizontal sway runs at half that (one full cycle per stride pair).
-pub fn bob_offset(elapsed: f32, speed: f32) -> Vec3 {
-    let scale = (speed / config::MOVE_SPEED).clamp(0.0, 1.0);
-    let amplitude = config::VIEWMODEL_BOB_AMPLITUDE * scale;
-    let w = config::VIEWMODEL_BOB_HZ * std::f32::consts::TAU;
+/// A subtle view bob driven by the **stride phase**, not wall-clock time, so
+/// it stays locked to [`footsteps`](crate::footsteps): `phase` is the running
+/// stride count plus fraction (`Footsteps::steps as f32 + Footsteps::phase`).
+/// Pure so it can be unit-tested. The vertical component dips to its minimum
+/// exactly on each footfall (integer `phase`); the horizontal sway swings one
+/// way per stride, crossing zero at every footfall — so its period is two
+/// strides. `speed_scale` (0 at a standstill, 1 at `MOVE_SPEED`) only scales
+/// the amplitude.
+pub fn bob_offset(phase: f32, speed_scale: f32) -> Vec3 {
+    let amplitude = config::VIEWMODEL_BOB_AMPLITUDE * speed_scale.clamp(0.0, 1.0);
     Vec3::new(
-        (elapsed * w * 0.5).sin() * amplitude,
-        -(elapsed * w).sin().abs() * amplitude,
+        (phase.rem_euclid(2.0) * std::f32::consts::PI).sin() * amplitude,
+        -(0.5 + 0.5 * (phase * std::f32::consts::TAU).cos()) * amplitude,
         0.0,
     )
 }
 
-/// Applies [`bob_offset`] to each [`ViewModel`]'s local translation.
+/// Applies [`bob_offset`] to each [`ViewModel`]'s local translation, phased off
+/// the player's [`Footsteps`](crate::footsteps::Footsteps).
 pub fn bob_viewmodel(
-    time: Res<Time>,
-    player: Query<&LinearVelocity, With<CharacterController>>,
+    player: Query<(&LinearVelocity, &crate::footsteps::Footsteps), With<CharacterController>>,
     mut holders: Query<&mut Transform, With<ViewModel>>,
 ) {
-    let speed = player
+    let (phase, speed_scale) = player
         .single()
-        .map(|v| Vec2::new(v.0.x, v.0.z).length())
-        .unwrap_or(0.0);
-    let offset = bob_offset(time.elapsed_secs(), speed);
+        .map(|(v, steps)| {
+            (
+                steps.steps as f32 + steps.phase,
+                Vec2::new(v.0.x, v.0.z).length() / config::MOVE_SPEED,
+            )
+        })
+        .unwrap_or((0.0, 0.0));
+    let offset = bob_offset(phase, speed_scale);
     for mut transform in &mut holders {
         transform.translation = config::VIEWMODEL_OFFSET + offset;
     }
@@ -159,8 +167,8 @@ mod tests {
 
     #[test]
     fn bob_is_still_at_a_standstill() {
-        for t in [0.0, 0.3, 1.7, 9.9] {
-            assert_eq!(bob_offset(t, 0.0), Vec3::ZERO);
+        for phase in [0.0, 0.3, 1.7, 9.9] {
+            assert_eq!(bob_offset(phase, 0.0), Vec3::ZERO);
         }
     }
 
@@ -168,20 +176,29 @@ mod tests {
     fn bob_stays_within_the_amplitude() {
         let max = config::VIEWMODEL_BOB_AMPLITUDE;
         for i in 0..400 {
-            let t = i as f32 * 0.05;
-            let o = bob_offset(t, config::MOVE_SPEED * 2.0); // clamped to 1.0
-            assert!(o.x.abs() <= max + 1e-6, "x {} at {t}", o.x);
-            assert!(o.y.abs() <= max + 1e-6, "y {} at {t}", o.y);
+            let phase = i as f32 * 0.05;
+            let o = bob_offset(phase, 2.0); // speed_scale clamped to 1.0
+            assert!(o.x.abs() <= max + 1e-6, "x {} at {phase}", o.x);
+            assert!(o.y.abs() <= max + 1e-6, "y {} at {phase}", o.y);
             assert!(o.y <= 1e-6, "vertical bob should only ever dip, got {}", o.y);
         }
     }
 
     #[test]
-    fn bob_is_periodic() {
-        // Full period is the slower (horizontal) component: 2 / HZ.
-        let period = 2.0 / config::VIEWMODEL_BOB_HZ;
-        let a = bob_offset(0.37, config::MOVE_SPEED);
-        let b = bob_offset(0.37 + period, config::MOVE_SPEED);
+    fn vertical_dips_on_the_footfall() {
+        // Minimum (most negative) at integer phase, back to zero mid-stride.
+        assert!((bob_offset(0.0, 1.0).y + config::VIEWMODEL_BOB_AMPLITUDE).abs() < 1e-6);
+        assert!(bob_offset(0.5, 1.0).y.abs() < 1e-6);
+        assert!((bob_offset(1.0, 1.0).y + config::VIEWMODEL_BOB_AMPLITUDE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bob_is_periodic_over_two_strides() {
+        let a = bob_offset(0.37, 1.0);
+        let b = bob_offset(0.37 + 2.0, 1.0);
         assert!((a - b).length() < 1e-4, "{a:?} vs {b:?}");
+        // …but not over one — the horizontal sway has flipped.
+        let c = bob_offset(0.37 + 1.0, 1.0);
+        assert!((a.x - c.x).abs() > 1e-4);
     }
 }

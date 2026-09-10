@@ -18,12 +18,13 @@
 //!
 //! All of this is opt-in via environment variables, checked once at
 //! startup in `main.rs`, so a normal `cargo run` behaves exactly as before:
-//! - `IMMERSIVE_AUTOPILOT=1` / `=crates` — walk a scripted route automatically.
+//! - `IMMERSIVE_AUTOPILOT=1` / `=crates` / `=walk` — walk a scripted route automatically.
 //! - `IMMERSIVE_TELEMETRY=1` — log position/speed/grounded/focus/lights periodically.
 //! - `IMMERSIVE_SHOTS=1` — take in-app screenshots at scripted checkpoints.
 //! - `IMMERSIVE_LIGHTS=on` — every fixture/switch comes up energised.
 //! - `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` at the wall switch once,
 //!   ~2.5 s in (the switch is only reachable by a hand-built crate stack).
+//! - `IMMERSIVE_AUDIO=log` — echo every `PlaySfx` request (clip, volume, pitch).
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
@@ -361,7 +362,9 @@ pub fn exercise_inventory(
 
 /// Which scripted run `IMMERSIVE_AUTOPILOT` selects: `=1` the ladder
 /// regression walk (`config::AUTOPILOT_SCRIPT`), `=crates` the crate
-/// grab/place/throw/weight-gate walk (`config::AUTOPILOT_SCRIPT_CRATES`).
+/// grab/place/throw/weight-gate walk (`config::AUTOPILOT_SCRIPT_CRATES`),
+/// `=walk` a plain back-and-forth on the open floor (`config::AUTOPILOT_SCRIPT_WALK`,
+/// for the footstep cadence).
 #[derive(Resource, Clone, Copy)]
 pub struct AutopilotScript(pub &'static [AutopilotStep]);
 
@@ -384,6 +387,7 @@ pub fn autopilot_script() -> Option<AutopilotScript> {
     match std::env::var("IMMERSIVE_AUTOPILOT").ok().as_deref() {
         Some("1") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT)),
         Some("crates") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT_CRATES)),
+        Some("walk") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT_WALK)),
         _ => None,
     }
 }
@@ -456,7 +460,7 @@ pub fn autopilot_drive(
         return;
     }
 
-    // Walk the script once and then hold on the last leg (both scripts end on
+    // Walk the script once and then hold on the last leg (every script ends on
     // a STILL leg). Not a loop — a second pass would start from a world the
     // first pass rearranged (a thrown crate underfoot), making the telemetry
     // impossible to read.
@@ -558,6 +562,7 @@ pub fn telemetry(
             Option<&Climbing>,
             Option<&Carrying>,
             Option<&ThrowCharge>,
+            Option<&crate::footsteps::Footsteps>,
         ),
         With<CharacterController>,
     >,
@@ -626,9 +631,10 @@ pub fn telemetry(
             )
         })
         .unwrap_or_default();
-    for (transform, state, climbing, carrying, charge) in &player {
+    for (transform, state, climbing, carrying, charge, footsteps) in &player {
         info!(
             "telemetry: pos={:?} grounded={} climbing={} carrying={} charge={:.2} \
+             steps={} phase={:.2} \
              crates(n={} max_y={:.2} moving={}) lights={}/{} switches_on={} \
              doors(open={}/{} locked={}) wood_crates={} pickups={} {pack} focus={:?} cam_yaw_pitch={:?}",
             transform.translation,
@@ -636,6 +642,8 @@ pub fn telemetry(
             climbing.is_some(),
             carrying.is_some(),
             charge.map_or(0.0, |c| c.0),
+            footsteps.map_or(0, |f| f.steps),
+            footsteps.map_or(0.0, |f| f.phase),
             count,
             if count > 0 { max_y } else { 0.0 },
             moving,
@@ -650,6 +658,27 @@ pub fn telemetry(
             focus.0.as_ref().map(|(_, prompt)| prompt.as_str()),
             cam,
         );
+    }
+}
+
+/// `IMMERSIVE_AUDIO=log` — echo every [`PlaySfx`](bevy_game_bits::audio::PlaySfx)
+/// request. Movement audio can't be verified any other way on a machine that
+/// can neither synthesise input nor capture sound: the log of what *would*
+/// play, with its volume and pitch, is the artefact.
+pub fn audio_log() -> bool {
+    std::env::var("IMMERSIVE_AUDIO").as_deref() == Ok("log")
+}
+
+pub fn log_sfx(
+    mut requests: MessageReader<bevy_game_bits::audio::PlaySfx>,
+    asset_server: Res<AssetServer>,
+) {
+    for req in requests.read() {
+        let clip = asset_server
+            .get_path(req.clip.id())
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| format!("{:?}", req.clip.id()));
+        info!("sfx: {clip} vol={:.2} speed={:.2}", req.volume, req.speed);
     }
 }
 

@@ -12,7 +12,7 @@ use bevy_ahoy::prelude::*;
 use bevy_enhanced_input::prelude::ContextActivity;
 use bevy_game_bits::inventory::prelude::InventoryWindow;
 
-use crate::{classes::PlayerSpawn, config, input};
+use crate::{classes::PlayerSpawn, config, footsteps::Footsteps, input};
 
 pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
     let player = add.entity;
@@ -36,6 +36,7 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
             // only the shove strength bevy_ahoy applies to dynamic props the
             // player walks into. See `config::PLAYER_PUSH_MASS`.
             Mass(config::PLAYER_PUSH_MASS),
+            Footsteps::default(),
             Name::new("Player"),
         ))
         .insert(input::player_input_bundle());

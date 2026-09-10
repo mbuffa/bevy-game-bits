@@ -1185,6 +1185,118 @@ no "write the camera late" trick, since it's not a physics body.
 **Still deferred:** the real `IMMERSIVE_AUTOPILOT=door` walk and
 `IMMERSIVE_WARP=platform_b`.
 
+## Phase 17 — Footsteps and movement audio ✅
+
+The demo had no sound at all. Phase 17 adds the sound of *moving*: a step per
+stride while walking, a heavier thump on landing, rung clanks while climbing, a
+quieter/shorter cadence while crouched — from `jsfxr` wavs
+(`assets/sfx/jsfxr/footstep{1,2}.wav` hard, `footstep{1,2}_wood.wav` for a
+wooden crate underfoot), pitched and levelled per cue.
+
+### `src/audio.rs` — the SFX plumbing moved to the library
+
+`examples/008-inventory/audio.rs` already had a correct one-shot player,
+including the guard that stops `bevy_audio` panicking on an undecodable clip.
+010-immersive is the second consumer, so the plumbing is now
+`bevy_game_bits::audio`: `PlaySfx { clip, volume, speed }` message, `SfxPlugin`,
+`SfxGuard`, `SfxSet::{Verify, Play}`, `is_decodable`. Keyed by
+`AssetId<AudioSource>`, so the library has no catalogue type — a game decides
+what a sound *means*. `tests/audio_sfx.rs` (4, headless, no `AudioPlugin`) +
+`is_decodable` unit tests. 008-inventory keeps only its `Sfx` catalogue and
+maps `InventoryAction` → `SfxAssets::play` → `PlaySfx`.
+
+### `examples/010-immersive/footsteps.rs`
+
+One `Footsteps` component on the player (`phase` fractional stride, `steps`
+total, plus edge/teleport bookkeeping). Two systems in `FixedPostUpdate`:
+`stash_fall_speed` `.before(AhoySystems::MoveCharacters)`, `advance_footsteps`
+`.after(AhoySystems::MoveCharacters).after(ladder::climb)`.
+
+- **`Transform` delta, not `LinearVelocity`** — `ladder::climb` zeroes velocity
+  every step, so a velocity-gated system is silent on a ladder. The frame's
+  real position delta covers walking, climbing and cresting; a single-tick
+  delta over `FOOTSTEP_MAX_STEP_M` is a teleport (mount, step-off, warp) and
+  adds nothing.
+- Landing thump fires on the `grounded` `None→Some` edge (not `Climbing`),
+  volume ramped by `landing_gain(fall_speed)` between `FOOTSTEP_LAND_MIN_SPEED`
+  and `_MAX_SPEED`, pitched to `FOOTSTEP_LAND_PITCH`. The landing counts as a
+  footfall (`phase = 0`).
+- Climbing: a rung clank every `LADDER_RUNG_M` of 3-D climb path, then the
+  branch returns — no walking, no thump.
+- Walking: horizontal distance into `advance(phase, dist, stride)`; `stride` ×
+  `FOOTSTEP_CROUCH_STRIDE_SCALE` when `state.crouching`. Below
+  `FOOTSTEP_MIN_SPEED` nothing accumulates (a crate shoving the player is
+  silent). Alternates `footstep1`/`footstep2` on `steps` parity.
+- `jitter(steps)` — an xorshift32 (no `rand` dep; the `008-colony` precedent),
+  seeded from the step count so a log replays; ± `FOOTSTEP_PITCH_JITTER` /
+  `_VOLUME_JITTER`.
+- `surface_of(ground_entity, …) -> Surface{Concrete,Metal,Wood}` — the seam.
+  `PropCrate` / `PropWoodCrate` resolve directly (marker + collider
+  co-located); a `ChildOf` walk covers a nested collider. `FootstepClips` maps
+  it to a set: `Wood` (standing on a wooden crate) has its own
+  `footstep{1,2}_wood.wav` pair, `Metal`/`Concrete` share the hard set (no
+  metal assets), the thump/clank are always hard. Telling the concrete floor
+  from the iron deck (both `Concrete` today) needs the `BrushesAsset` plane
+  scan (see the trap below) and its own asset set.
+
+### The viewmodel bob is re-phased onto the stride
+
+`viewmodel::bob_offset` was `bob_offset(elapsed, speed)` at a fixed
+`VIEWMODEL_BOB_HZ` — it would drift against a distance-based footstep. Now
+`bob_offset(phase, speed_scale)` where `phase = Footsteps::steps as f32 +
+Footsteps::phase`: vertical dips to its minimum on each footfall (integer
+phase), horizontal sways one way per stride (period 2). `VIEWMODEL_BOB_HZ`
+deleted. Three tests rewritten.
+
+### Traps (found while planning / building)
+
+1. **`bevy_ahoy`'s `set_grounded` zeroes `velocity.y` the tick it grounds**
+   (`kcc.rs:1279`) — fall speed must be sampled `.before(MoveCharacters)` or
+   every landing reads 0 m/s. Hence `stash_fall_speed`.
+2. **`ladder::climb` zeroes `LinearVelocity` every step** and writes an
+   absolute `Transform` — velocity-driven audio is silent on ladders. Measure
+   `Transform` delta and guard teleports.
+3. **`grounded` stays `Some` mid-climb** — the walking branch is gated on
+   `Without`-equivalent (`!climbing`) explicitly, not on the speed test.
+4. **`bevy_audio` hard-panics on undecodable bytes** (`rodio` `.unwrap()`) —
+   `src/audio::is_decodable` sniffs the header first. The two footstep wavs
+   were brand new and not yet LFS-tracked when this landed.
+5. **The whole map is one compound collider.** `.convex_collider()`
+   (`trenchbroom.rs`) collapses all ~25 worldspawn brushes into a single
+   `Collider` on the `worldspawn` entity, and Avian's `MoveHitData` exposes no
+   sub-shape index — so `grounded.entity` alone cannot tell the concrete floor
+   from the iron deck. It *is* recoverable: `worldspawn` carries
+   `Brushes::Shared(Handle<BrushesAsset>)`, and each `BrushSurface` has a
+   Bevy-space `plane` + a `texture` string, so the face underfoot is the one
+   whose plane contains the contact point with a matching normal. That plane
+   scan is the work a concrete-vs-iron sound split would justify.
+6. **`AutopilotScript` holds the last leg forever** (`autopilot_drive`) — so
+   `AUTOPILOT_SCRIPT_WALK` has to end on a `STILL` leg or the player walks into
+   a wall indefinitely.
+
+### Verified (2026-09-10)
+
+- **`IMMERSIVE_AUTOPILOT=walk IMMERSIVE_AUDIO=log`** — new plain-walk script.
+  46 steps for ~87 m of back-and-forth on the warehouse floor (~1 per
+  `FOOTSTEP_STRIDE_M`), **strictly alternating** `footstep2`/`footstep1`,
+  volume 0.38–0.52 (`FOOTSTEP_VOLUME` ± jitter), speed 0.89–1.12. **Silence**
+  the whole stretch the body is pressed against the ladder wall below
+  `FOOTSTEP_MIN_SPEED`.
+- **`IMMERSIVE_AUTOPILOT=1 IMMERSIVE_AUDIO=log`** — walking steps → a block of
+  rung clanks (all clip A) exactly while `climbing=true` and the body's `y` is
+  rising → one soft landing (`speed=0.75`) as it crests onto platform A → walking
+  resumes, alternating. The grab-#2 jump (a >1 m single-tick `y` jump) fires
+  nothing (teleport guard). No panics, no `sfx … muted` errors.
+- `cargo test` green: lib 67 (+3 `audio`), `audio_sfx` 4, `inventory_drag` 27,
+  `inventory_quickbar` 6, `vehicle_physics` 7, `world_map_travel` 22,
+  example-010 22 (+8 `footsteps`, `bob_offset` rewritten). `cargo build
+  --example 008-inventory` clean. Clippy: no new warnings in touched files.
+- **Not machine-verifiable here** (no audio capture): that it actually sounds
+  right — left for a human `cargo run`.
+- Observed-but-benign: the first footstep after spawn occasionally logs at
+  crouch volume (0.29 vs 0.30 base) — a one-tick `state.crouching` transient
+  during the initial physics settle; sub-audible, not chased.
+
 ## Environment notes
 
 - TrenchBroom.app is installed on this Mac (`~/Library/Application Support/TrenchBroom` exists) — the game config + FGD write on every `cargo run` (`bevy_trenchbroom::config::writing` info logs confirm success).

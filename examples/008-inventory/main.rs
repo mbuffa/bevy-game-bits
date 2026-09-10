@@ -28,9 +28,10 @@
 mod audio;
 
 use bevy::prelude::*;
+use bevy_game_bits::audio::PlaySfx;
 use bevy_game_bits::inventory::prelude::*;
 
-use crate::audio::{AudioPlugin, PlaySfx, Sfx};
+use crate::audio::{AudioPlugin, Sfx, SfxAssets};
 
 const CLEAR_COLOR: Color = Color::srgb(0.08, 0.08, 0.1);
 
@@ -382,6 +383,7 @@ fn resize_bag(
 /// facts; picking sounds for them is a game's decision.
 fn play_inventory_sfx(
     mut actions: MessageReader<InventoryAction>,
+    assets: Res<SfxAssets>,
     mut sfx: MessageWriter<PlaySfx>,
 ) {
     for action in actions.read() {
@@ -397,6 +399,6 @@ fn play_inventory_sfx(
             | InventoryAction::Evicted { .. } => Sfx::Invalid,
             InventoryAction::Resized { .. } => Sfx::Select,
         };
-        sfx.write(PlaySfx(sound));
+        sfx.write(assets.play(sound));
     }
 }

@@ -498,9 +498,71 @@ pub const VIEWMODEL_GLOW: f32 = 0.5;
 /// Peak view-bob displacement (metres) at full walking speed; scales linearly
 /// down to nothing at a standstill.
 pub const VIEWMODEL_BOB_AMPLITUDE: f32 = 0.014;
-/// View-bob frequency (Hz) — the vertical bob is twice this (a footfall per
-/// half-cycle).
-pub const VIEWMODEL_BOB_HZ: f32 = 1.4;
+
+// --- Footsteps (Phase 17) ----------------------------------------------------
+//
+// Movement audio: a step per stride while walking, a heavier thump on landing,
+// rung clanks while climbing, quieter/faster cadence while crouched. `footsteps.rs`
+// owns it; the same `Footsteps.phase` accumulator also drives the viewmodel
+// bob (`viewmodel.rs`), so the step lands at the bottom of the dip. All four
+// cues come from the same two `jsfxr` wavs — `FOOTSTEP_WAV_A`/`_B` — pitched
+// and levelled per cue. `surface_of` resolves what's underfoot into a
+// `Surface`, but every variant maps to the same pair today: the seam is there
+// so a second sound set is new assets plus a match arm, not a rewrite. See
+// SPEC.md Phase 17.
+
+/// The alternating footstep pair (jsfxr). `A` plays on even steps, `B` on odd;
+/// the landing thump reuses hard-surface `A` pitched down, a rung clank
+/// reuses it too. The `_WOOD` pair is `Surface::Wood` (standing on a wooden
+/// crate) — the second sound set the `surface_of` seam was built for.
+pub const FOOTSTEP_WAV_A: &str = "sfx/jsfxr/footstep1.wav";
+pub const FOOTSTEP_WAV_B: &str = "sfx/jsfxr/footstep2.wav";
+pub const FOOTSTEP_WAV_A_WOOD: &str = "sfx/jsfxr/footstep1_wood.wav";
+pub const FOOTSTEP_WAV_B_WOOD: &str = "sfx/jsfxr/footstep2_wood.wav";
+
+/// Metres of ground covered per footfall at a normal walk. At `MOVE_SPEED`
+/// (4.5 m/s) that's ~2.4 steps/s — a brisk indoor pace, not a jog.
+pub const FOOTSTEP_STRIDE_M: f32 = 1.9;
+/// Crouch shortens the stride (ahoy's `crouch_speed_scale` already caps
+/// crouch-walk at 1.5 m/s, so without this the cadence would nearly halve).
+/// 0.6 keeps a crouched step roughly as frequent as a walked one.
+pub const FOOTSTEP_CROUCH_STRIDE_SCALE: f32 = 0.6;
+/// Below this ground speed (m/s) the stride accumulator is frozen — a crate
+/// shoving the player, or a slow drift, makes no sound.
+pub const FOOTSTEP_MIN_SPEED: f32 = 0.6;
+/// A single-tick position jump larger than this (metres) is a teleport (ladder
+/// mount, bottom step-off, a devtool warp), not a stride — it contributes
+/// nothing to the accumulator.
+pub const FOOTSTEP_MAX_STEP_M: f32 = 1.0;
+
+/// Linear volume of a walked footstep before per-step jitter.
+pub const FOOTSTEP_VOLUME: f32 = 0.45;
+/// Linear volume of a crouched footstep — quieter, the point of crouching.
+pub const FOOTSTEP_CROUCH_VOLUME: f32 = 0.3;
+/// Per-step playback-speed jitter, ± this fraction (also the pitch), so a run
+/// doesn't machine-gun one identical sample.
+pub const FOOTSTEP_PITCH_JITTER: f32 = 0.12;
+/// Per-step volume jitter, ± this fraction.
+pub const FOOTSTEP_VOLUME_JITTER: f32 = 0.15;
+
+/// Metres climbed (3-D path, so the x/z ease counts too) between rung clanks.
+pub const LADDER_RUNG_M: f32 = 0.45;
+/// Linear volume of a rung clank.
+pub const FOOTSTEP_RUNG_VOLUME: f32 = 0.5;
+
+/// Downward speed (m/s) at which a landing starts to be audible at all. The
+/// jump impulse is `sqrt(2·29·1.8) ≈ 10.2 m/s`, so even a flat hop lands
+/// audibly; a step off a low crate (~3 m/s) doesn't.
+pub const FOOTSTEP_LAND_MIN_SPEED: f32 = 4.0;
+/// Downward speed (m/s) at which the landing thump saturates. The platform-B
+/// drop (deck top ~4.88 m → ~16.8 m/s at the floor) is well past this.
+pub const FOOTSTEP_LAND_MAX_SPEED: f32 = 14.0;
+/// Linear volume of a fully-saturated landing thump (a soft landing scales
+/// down toward `FOOTSTEP_VOLUME`).
+pub const FOOTSTEP_LAND_VOLUME_MAX: f32 = 0.9;
+/// Playback speed (pitch) of the landing thump — the walk sample dropped an
+/// octave-ish so it reads as a heavier impact.
+pub const FOOTSTEP_LAND_PITCH: f32 = 0.75;
 
 // --- Devtools ------------------------------------------------------------
 
@@ -857,6 +919,56 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         jump: false,
         grab: false,
         pitch_deg: -18.0,
+    },
+];
+
+/// Plain walk, selected by `IMMERSIVE_AUTOPILOT=walk` — the one script that
+/// just *walks* the open warehouse floor: no ladder mount, no jump, no grab,
+/// nothing flaky. Verifies the footstep cadence with `IMMERSIVE_AUDIO=log`:
+/// forward ~7 m into the ladder wall (the first ~4 steps, then the body is
+/// pressed against the collider and `FOOTSTEP_MIN_SPEED` gates the rest to
+/// silence — a check in itself), a stop, then a long walk back across the
+/// deck — ~1 logged step per `FOOTSTEP_STRIDE_M` travelled, strictly
+/// alternating `footstep2`/`footstep1`, volume `FOOTSTEP_VOLUME` ±
+/// `FOOTSTEP_VOLUME_JITTER`, speed `1.0` ± `FOOTSTEP_PITCH_JITTER`.
+pub const AUTOPILOT_SCRIPT_WALK: &[AutopilotStep] = &[
+    AutopilotStep {
+        duration: 3.5,
+        movement: FWD,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: 0.0,
+    },
+    AutopilotStep {
+        duration: 1.5,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: 0.0,
+    },
+    AutopilotStep {
+        duration: 3.5,
+        movement: bevy::math::Vec2::new(0.0, -1.0),
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: 0.0,
+    },
+    // End on STILL — `autopilot_drive` holds the last leg forever, so it must
+    // be a standstill or the player walks into a wall indefinitely.
+    AutopilotStep {
+        duration: 2.0,
+        movement: STILL,
+        yaw_rate: 0.0,
+        interact: false,
+        jump: false,
+        grab: false,
+        pitch_deg: 0.0,
     },
 ];
 
