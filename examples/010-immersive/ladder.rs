@@ -1,14 +1,14 @@
 //! Half-Life / Deus Ex-style ladder climbing, bracketed around bevy_ahoy's
 //! kinematic controller.
 //!
-//! Aim at a ladder and press **E** to lock on: your body snaps onto the
-//! ladder's front face (`LADDER_STANDOFF` out from its centre line, so the
+//! Aim at a ladder and press **RMB (or E)** to lock on: your body snaps onto
+//! the ladder's front face (`LADDER_STANDOFF` out from its centre line, so the
 //! rungs are in front of you and not through the near plane), your view eases
 //! round to face the rungs, and then forward climbs and backward descends with
-//! mouse-look free. Press E again
-//! (or Space) to let go. There is no automatic "walk into it" grab — E is the
-//! only way on, so every mount lands you square whether you're at the foot of
-//! the ladder or peering down at its head from the deck.
+//! mouse-look free. Press RMB/E again
+//! (or Space) to let go. There is no automatic "walk into it" grab — the
+//! interact press is the only way on, so every mount lands you square whether
+//! you're at the foot of the ladder or peering down at its head from the deck.
 //!
 //! `bevy_ahoy`'s `run_kcc` is one private monolithic system with no seam for
 //! a new movement mode (its own source even marks the slot: *"here we'd
@@ -18,7 +18,7 @@
 //! | system | when | job |
 //! |---|---|---|
 //! | `stash_input` | `RunFixedMainLoop`, `BeforeFixedMainLoop` | move the frame's intent into `Climbing` (zero if nothing is held), clearing `AccumulatedInput` so ahoy walks/jumps nowhere |
-//! | `attach_on_interact` | `On<Interacted>` | the E-grab: mount, or toggle off if already climbing |
+//! | `attach_on_interact` | `On<Interacted>` | the RMB/E grab: mount, or toggle off if already climbing |
 //! | `let_go_on_jump` | `On<Start<Jump>>` | a Space *press* while climbing detaches (the press edge, not ahoy's buffer) |
 //! | `turn_to_ladder` | `PostUpdate`, before `TransformSystems::Propagate` | ease the camera yaw onto the ladder facing after a grab |
 //! | `climb` | `FixedPostUpdate`, after `MoveCharacters`, before `PhysicsSystems::First` | assert the climb position onto `Transform` and zero `LinearVelocity`, discarding whatever ahoy did this step |
@@ -107,7 +107,7 @@ pub struct Climbing {
     crest: Option<f32>,
 }
 
-/// On the player's camera entity right after an E-grab: the target yaw
+/// On the player's camera entity right after an interact-grab: the target yaw
 /// (radians) `turn_to_ladder` eases the view onto, then removes itself.
 #[derive(Component)]
 pub struct LadderTurn(f32);
@@ -217,10 +217,13 @@ fn ladder_mesh(width: f32, height: f32) -> Mesh {
     mesh
 }
 
-/// E on a ladder: the one and only way on. Snap the body onto the ladder's
-/// centre line at whatever height you're at, and kick off the yaw ease that
-/// turns your view to face the rungs (so W/S read as up/down). Press E again
-/// while climbing and it lets go — a lock/unlock toggle.
+/// RMB or E on a ladder: the one and only way on. Snap the body onto the
+/// ladder's centre line at whatever height you're at, and kick off the yaw ease
+/// that turns your view to face the rungs (so W/S read as up/down). Press it
+/// again while climbing and it lets go — a lock/unlock toggle. Idempotent per
+/// press: works whether one binding or both fire (they can't — one press, one
+/// `Interacted`), and safe against RMB also raising `Start<Grab>` (a ladder is
+/// `Static`, so `carry::start_grab` rejects it).
 pub fn attach_on_interact(
     trigger: On<Interacted>,
     ladders: Query<&Ladder>,
@@ -259,7 +262,7 @@ pub fn attach_on_interact(
     commands.entity(camera.get()).insert(LadderTurn(yaw));
 }
 
-/// Ease the camera's yaw onto the ladder facing after an E-grab, then drop
+/// Ease the camera's yaw onto the ladder facing after an interact-grab, then drop
 /// the marker. Pitch is left alone — you keep looking wherever you were.
 ///
 /// In `PostUpdate`, not `Update`: ahoy's `copy_character_look_to_camera`

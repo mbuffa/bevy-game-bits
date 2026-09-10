@@ -18,20 +18,40 @@ use crate::config;
 #[derive(Component, Default)]
 pub struct PlayerInput;
 
+/// "Reach out and touch the thing under the crosshair": mount/dismount a
+/// ladder, open a hinged door, flip a wall switch — `interact.rs` fires
+/// `Interacted` at `InteractionFocus` on the press edge. Bound to **RMB or E**;
+/// RMB is shared with `Grab`, harmlessly, because a grabbable class
+/// (`PropCrate`/`ItemPickup`) never has an `Interacted` consumer and an
+/// interactable one (`FuncLadder`/`PropDoor`/`FuncLightSwitch`) is never
+/// liftable — the two press-edge events land on disjoint targets.
 #[derive(Debug, InputAction)]
 #[action_output(bool)]
 pub struct Interact;
 
-/// RMB: grab / carry / throw a `PropCrate`, consumed by `carry.rs`.
+/// RMB press edge: grab an aimed `PropCrate` to carry (`carry.rs`), or pocket
+/// an aimed `ItemPickup` into the grid pack (`pickup.rs`). RMB while already
+/// carrying does nothing — putting a crate down is `Throw` (LMB). RMB *also*
+/// fires `Interact` (`interact.rs`); the two never hit the same target (see
+/// that type's doc).
 #[derive(Debug, InputAction)]
 #[action_output(bool)]
 pub struct Grab;
 
-/// LMB: use the active inventory item on whatever the crosshair is on —
-/// consumed by `use_item.rs` (Phase 16). Edge-triggered like `Interact`.
+/// LMB, hands free: use the active inventory item on whatever the crosshair is
+/// on — consumed by `use_item.rs` (Phase 16). Edge-triggered like `Interact`.
+/// Shares LMB with `Throw`; `fire_use` no-ops while carrying, so the two never
+/// both apply.
 #[derive(Debug, InputAction)]
 #[action_output(bool)]
 pub struct Use;
+
+/// LMB while carrying a crate: a tap places it straight ahead, a hold+release
+/// throws it — the charge builds between `Start<Throw>` and `Complete<Throw>`
+/// (`carry.rs`). Unconditioned like `Grab` so those edges bracket the hold.
+#[derive(Debug, InputAction)]
+#[action_output(bool)]
+pub struct Throw;
 
 /// `PlayerInput` plus every action binding, inserted onto the player entity
 /// when it spawns. Movement/camera bindings mirror bevy_ahoy's own
@@ -73,18 +93,23 @@ pub fn player_input_bundle() -> impl Bundle {
                 // action is `Down`-like and its `Fire` event triggers *every
                 // frame* the key is held — which turns any toggling
                 // `Interacted` consumer (`ladder::attach_on_interact`'s
-                // lock/unlock) into a coin flip. `door`/`pickup` only survive
-                // that by being idempotent.
+                // lock/unlock) into a coin flip. `door` only survives that by
+                // being idempotent. The condition guards the RMB path just as
+                // much as the E one.
+                //
+                // No `require_reset` here (unlike `Use`/`Throw`): RMB never
+                // re-grabs the cursor or closes a board — only LMB does
+                // (`player::player_cursor_input`) — so there's no
+                // context-reactivation edge to hold this action inert against.
                 Press::default(),
-                bindings![KeyCode::KeyE, GamepadButton::West],
+                bindings![KeyCode::KeyE, GamepadButton::West, MouseButton::Right],
             ),
             (
-                // Deliberately *unconditioned*, unlike `Interact`. `carry.rs`
-                // never reads `Fire<Grab>`: it grabs/charges on the `Start<Grab>`
-                // press edge and places/throws on the `Complete<Grab>` release,
-                // with the hold duration in between as the throw charge. A
-                // `Press` here would collapse the hold and swallow the release.
-                // Same `Start`/`Complete` pair as ahoy's unconditioned `Jump`.
+                // Unconditioned (`carry.rs` / `pickup.rs` act on the
+                // `Start<Grab>` press edge, not `Fire<Grab>`), and kept that way
+                // rather than `Press` to stay symmetric with `Throw`, whose
+                // `Start`/`Complete` really do need to bracket a hold. Same
+                // pair ahoy's unconditioned `Jump` uses.
                 Action::<Grab>::new(),
                 bindings![MouseButton::Right, GamepadButton::RightTrigger2],
             ),
@@ -100,6 +125,20 @@ pub fn player_input_bundle() -> impl Bundle {
                 // must not also fire `Use` the frame the context comes back.
                 // This is bevy_enhanced_input's own answer — hold the action
                 // inert until its inputs go idle again.
+                ActionSettings {
+                    require_reset: true,
+                    ..default()
+                },
+                bindings![MouseButton::Left, GamepadButton::East],
+            ),
+            (
+                // Unconditioned, like `Grab`: `carry.rs` arms a `ThrowCharge` on
+                // `Start<Throw>` and places/throws on `Complete<Throw>`, with the
+                // hold between as the charge. Shares LMB with `Use` — harmless,
+                // because `start_throw`/`release_prop` only act while `Carrying`
+                // and `fire_use` only acts while not. `require_reset` for the
+                // same reason `Use` has it: LMB is also the cursor re-grab click.
+                Action::<Throw>::new(),
                 ActionSettings {
                     require_reset: true,
                     ..default()

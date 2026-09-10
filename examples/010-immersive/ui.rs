@@ -11,8 +11,8 @@ use crate::config;
 use crate::door::DoorSwing;
 use crate::interact::InteractionFocus;
 use crate::ladder::Climbing;
-use bevy_game_bits::inventory::prelude::{ActiveSlot, Quickbar};
 use crate::pickup::{ItemKind, PackFullFlash, PlayerPack};
+use bevy_game_bits::inventory::prelude::{ActiveSlot, Quickbar};
 
 #[derive(Component)]
 pub struct PromptText;
@@ -156,9 +156,9 @@ pub fn update_prompt(
         // The strip and board are the whole UI while the pack is open.
         String::new()
     } else if !climbing.is_empty() {
-        "W/S to climb · E or Space to let go".to_string()
+        "W/S to climb · RMB/E or Space to let go".to_string()
     } else if !carrying.is_empty() {
-        "RMB to place, hold RMB to throw".to_string()
+        "LMB to put it down · hold LMB to throw".to_string()
     } else if let Some((target, prompt)) = focus.0.as_ref() {
         match held {
             Some("lockpick") if doors.get(*target).is_ok_and(|d| d.locked) => {

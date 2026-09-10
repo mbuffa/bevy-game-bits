@@ -36,22 +36,24 @@ Observers:  On<Add, PlayerSpawn> -> CharacterController + Collider + camera
             (Phase 2: On<SceneCollidersReady> -> DoorState + RigidBody::Kinematic)
             (Phase 7: On<SceneCollidersReady> -> Ladder + Sensor on the volume
                       + ladder mesh child carrying its own solid Collider)
-            (Phase 7: On<Interacted> -> ladder::attach_on_interact — E mounts, or toggles off)
+            (Phase 7: On<Interacted> -> ladder::attach_on_interact — RMB or E mounts, or toggles off)
             (Phase 7: On<Start<Jump>> -> ladder::let_go_on_jump — a Space press while climbing detaches)
             (Phase 8: On<Add, PropCrate> -> carry::spawn_crates — dynamic body + collider + Mass)
-            (Phase 8: On<Start<Grab>> -> carry::start_grab_or_charge — RMB grabs the aimed crate, or arms a throw)
-            (Phase 8: On<Complete<Grab>> -> carry::release_prop — RMB release places (tap) or throws (held))
+            (Phase 8: On<Start<Grab>> -> carry::start_grab — RMB grabs the aimed crate (no-op while carrying))
+            (Phase 3/18: On<Start<Grab>> -> pickup::collect_on_grab — RMB on an ItemPickup pockets it (disjoint from the crate branch))
+            (Phase 19: On<Start<Throw>> -> carry::start_throw — LMB while carrying arms a ThrowCharge)
+            (Phase 19: On<Complete<Throw>> -> carry::release_prop — LMB release while carrying places (tap) or throws (held))
             (Phase 9: On<Add, LightFixture> -> lights::spawn_fixtures — lamp mesh + downward SpotLight + Powered)
             (Phase 9: On<SceneCollidersReady> -> lights::setup_switches — plate + indicator from the brush AABB + SwitchState)
-            (Phase 9: On<Interacted> -> lights::toggle_on_interact — flip the switch, push Powered to matching fixtures)
+            (Phase 9: On<Interacted> -> lights::toggle_on_interact — RMB or E flips the switch, push Powered to matching fixtures)
             (Phase 10: On<Add, PropDoor> -> door::spawn_swing_doors — kinematic body + leaf/handle/lock-plate children + DoorSwing)
-            (Phase 10: On<Interacted> -> door::toggle_swing_on_interact — E toggles, refuses while locked)
+            (Phase 10: On<Interacted> -> door::toggle_swing_on_interact — RMB or E toggles, refuses while locked)
             (Phase 10: On<Add, PropWoodCrate> -> breakable::spawn_wood_crates — dynamic body + collider + Breakable + plank mesh)
-            (Phase 16: On<Fire<Use>> -> use_item::fire_use — active lockpick clears DoorSwing::locked / active crowbar damages a Breakable)
+            (Phase 16: On<Fire<Use>> -> use_item::fire_use — active lockpick clears DoorSwing::locked / active crowbar damages a Breakable; no-op while carrying (that LMB is a Throw))
 Update:     (Phase 9) lights::sync_fixtures / sync_switch_indicators / sync_ambient — idempotent state mirrors
             (Phase 10) door::swing_doors (ease the yaw) / door::sync_lock_plates (idempotent mirror)
             (Phase 10) breakable::{damage_on_impact -> shatter} chained / despawn_after (debris cleanup)
-            (Phase 16) use_item::select_active_item — number keys pick a pickup::Inventory slot
+            (Phase 15) inventory::quickbar::select_slot — number keys 1–9/0 set the active quickbar slot
 PostUpdate: (Phase 8) carry::hold_prop — park the held crate in front of the camera, before Propagate
 PreUpdate:  bevy_enhanced_input -> ahoy AccumulatedInput
 RunFixedMainLoop:
@@ -64,7 +66,7 @@ FixedPostUpdate:
                           (Phase 7) ladder::climb — absolute Transform + zero velocity;
                           the top dismount is a walked crest onto the deck, not a teleport
 Update:     ahoy camera<->CharacterLook sync
-            interact::update_focus -> fire_interact -> Interacted
+            interact::update_focus -> fire_interact (RMB or E) -> Interacted
             door::drive_doors, ui::update_prompt
 PostUpdate: (Phase 7) ladder::turn_to_ladder — yaw ease onto the rungs, before Propagate
 ```
@@ -120,7 +122,7 @@ Not yet verified: live WASD/mouse-look input (synthetic input is blocked on this
 
 Done:
 - `Interactable` base class carrying a `prompt: String`; `FuncDoor` solid class (`angle`/`speed`/`lip`/`wait`, Quake semantics).
-- `interact.rs`: `SpatialQuery::cast_ray` from the camera (same pattern as `009-derby/vehicle.rs:405-530`), `InteractionFocus` resource, `Interacted` event fired on `Fire<input::Interact>` (E key).
+- `interact.rs`: `SpatialQuery::cast_ray` from the camera (same pattern as `009-derby/vehicle.rs:405-530`), `InteractionFocus` resource, `Interacted` event fired on `Fire<input::Interact>` (RMB or E — RMB added in Phase 20).
 - `door.rs`: `setup_doors` observes `SceneCollidersReady` (not `On<Add, FuncDoor>` — the `ColliderAabb` doesn't exist yet at that point) and computes travel distance from the door's own collider AABB projected onto `angle`'s direction via the standard box support-function formula (`2·(hx·|dx| + hy·|dy| + hz·|dz|)`), minus `lip`. Explicitly inserts `RigidBody::Kinematic` — `insert_static_collider`'s `insert_if_new(RigidBody::Static)` won't overwrite, but doesn't give us kinematic either, so the door needs its own override. State machine: Closed → Opening → Open (holds for `wait` seconds) → Closing → Closed.
 - Test door added to the bootstrap map: free-standing (not set into a wall gap — that needs the Phase 4 TrenchBroom-authored map), `angle 90 speed 2 lip 0.2 wait 3 prompt "Open door"`.
 
@@ -134,7 +136,7 @@ Not yet verified live: prompt visibility falloff at the 2.5 m boundary, and the 
 
 ## Phase 3 — The pickup ✅
 
-**Goal:** E on an `item_pickup` despawns it and adds its `item` string to an on-screen inventory.
+**Goal:** E on an `item_pickup` despawns it and adds its `item` string to an on-screen inventory. *(Changed in Phase 18: the trigger is now **RMB** — `Start<Grab>` — not E. The rest still stands.)*
 
 Done:
 - `ItemPickup` point class (`base(Transform, Interactable)`, `item: String` property).
@@ -156,7 +158,7 @@ Both items collected, `Inventory` populated with both distinct values in trigger
 
 Done:
 - `devtools.rs` behind env vars, gated once at startup in `main.rs` (a normal `cargo run` behaves exactly as before):
-  - `IMMERSIVE_AUTOPILOT=1`: `autopilot_drive` walks `config::AUTOPILOT_SCRIPT` — per-leg `movement` / `yaw_rate` / `interact` / `jump` — writing `AccumulatedInput.last_movement` (the same field ahoy's own WASD observer writes), rotating the camera `Transform` directly (ahoy copies that into `CharacterLook`, which steers movement), **tapping the real `KeyCode::KeyE` in `ButtonInput`** for `config::AUTOPILOT_TAP_SECS` on `interact` legs (starting the frame `InteractionFocus` resolves, via a shared `Tap` helper), and **holding the real `KeyCode::Space` down for the whole of any `jump` leg** — so a run of consecutive `jump` legs is one continuous hold, i.e. Space pressed well before the leg that grabs the ladder. It runs in `PreUpdate` between `bevy::input::InputSystems` and `EnhancedInputSystems::Update` so the key writes are sampled the same frame. Pressing the *real* keys rather than triggering `Interacted` / writing `AccumulatedInput.jumped` directly is deliberate: it puts the whole binding → `Press` condition → `Fire<Interact>` → `fire_interact` path (E) and binding → ahoy `Jump` / `Start<Jump>` path (Space) under test — the only way the harness can catch the E action firing every frame instead of once per press, or a jump *pressed before* a grab wrongly knocking the player off a ladder (see Phase 7).
+  - `IMMERSIVE_AUTOPILOT=1`: `autopilot_drive` walks `config::AUTOPILOT_SCRIPT` — per-leg `movement` / `yaw_rate` / `interact` / `jump` — writing `AccumulatedInput.last_movement` (the same field ahoy's own WASD observer writes), rotating the camera `Transform` directly (ahoy copies that into `CharacterLook`, which steers movement), **tapping the real interact button in `ButtonInput`** for `config::AUTOPILOT_TAP_SECS` on `interact` legs (starting the frame `InteractionFocus` resolves, via a shared generic `Tap` helper), and **holding the real `KeyCode::Space` down for the whole of any `jump` leg** — so a run of consecutive `jump` legs is one continuous hold, i.e. Space pressed well before the leg that grabs the ladder. It runs in `PreUpdate` between `bevy::input::InputSystems` and `EnhancedInputSystems::Update` so the key writes are sampled the same frame. Pressing the *real* keys rather than triggering `Interacted` / writing `AccumulatedInput.jumped` directly is deliberate: it puts the whole binding → `Press` condition → `Fire<Interact>` → `fire_interact` path (RMB/E) and binding → ahoy `Jump` / `Start<Jump>` path (Space) under test — the only way the harness can catch the interact action firing every frame instead of once per press, or a jump *pressed before* a grab wrongly knocking the player off a ladder (see Phase 7). `=rmb` (Phase 20) runs this exact script but taps `MouseButton::Right`, the A/B that proves RMB is now an interact button; `=crates` / `=walk` are the Phase 8/17 variants.
   - `IMMERSIVE_TELEMETRY=1`: `telemetry` logs position/grounded/interaction-focus every `config::TELEMETRY_INTERVAL` (0.25s).
   - `IMMERSIVE_SHOTS=1`: `take_screenshot` spawns a `Screenshot::primary_window()` + `save_to_disk`, saved to `screenshots/010-immersive/`.
   - `IMMERSIVE_GIZMOS` (avian `PhysicsDebugPlugin`) **not implemented** — descoped, lower value than the other three and none of the debugging this session needed it.
@@ -228,11 +230,12 @@ Physical object pickup via ahoy's `pickup` feature (`avian_pickup`); `func_butto
 
 **Goal:** a Half-Life / Deus Ex-style ladder: aim at it and press **E** to
 lock on, forward climbs and back descends, mouse-look stays free, no
-third-person cutscene and no teleport. E is the *only* way on — there's no
-automatic "walk into it" grab, so a single code path mounts you square whether
-you're at the foot of the ladder or looking down at its head from the deck,
-and there's no mirrored "press S facing away to descend" that fires when you
-just want to back up near a ladder. Press E again (or Space) to let go.
+third-person cutscene and no teleport. The interact press (RMB or E — RMB
+added in Phase 20) is the *only* way on — there's no automatic "walk into it"
+grab, so a single code path mounts you square whether you're at the foot of the
+ladder or looking down at its head from the deck, and there's no mirrored "press
+S facing away to descend" that fires when you just want to back up near a
+ladder. Press it again (or Space) to let go.
 
 ### The map is now a warehouse, generated
 
@@ -561,12 +564,12 @@ the lowest rung, and pressing S again finishes the step down).
 
 **Goal:** heavy metal crates the player grabs with RMB and stacks to reach
 **platform B** (which has no ladder — "the gap is the point"). Grab a crate with
-RMB; it floats half-opacity in front of the view with its collider off. RMB
-again to drop it: a tap *places* it straight down (precise, for stacking), a
-hold charges a throw (a slider under the crosshair fills) and the release flings
-it. Walking into the pile must not shift it. (Phase 8b: the map pre-places one
-big fixed crate at platform B's edge so the climb is 2 placements, not 8 — see
-"Getting onto platform B" below.)
+RMB; it floats half-opacity in front of the view with its collider off.
+*(Changed in Phase 19: **LMB** drops it — a tap places it straight down
+precisely, a hold charges a throw and the release flings it. RMB while carrying
+now does nothing.)* Walking into the pile must not shift it. (Phase 8b: the map
+pre-places one big fixed crate at platform B's edge so the climb is 2
+placements, not 8 — see "Getting onto platform B" below.)
 
 New module `carry.rs`, class `PropCrate` (`classes.rs`), action `Grab`
 (`input.rs`), plus a `Mass` on the player and a HUD slider (`ui.rs`).
@@ -605,17 +608,31 @@ the `ladder::turn_to_ladder` slot: the camera is a root entity so its
 CARRY_MAX_MASS)` — one rule. Ladder brushes are `RigidBody::Static` and doors
 `Kinematic`, so both are rejected by body *type* before mass is read; that's
 "you can't grab a ladder" for free. Shared with the "use" ray via
-`interact::InteractionFocus`, so range and aim match E.
+`interact::InteractionFocus`, so range and aim match E. *(Phase 18:
+`pickup::collect_on_grab` is a second `Start<Grab>` observer reading the same
+`InteractionFocus` — an `ItemPickup` is `RigidBody::Static`, so it falls
+straight through this gate and the pickup observer handles it instead. The two
+never both act on one press.)*
 
-### `Grab` is unconditioned; place vs throw is `Start`/`Complete`
+### `Grab`/`Throw` are unconditioned; the charge is `Start`/`Complete`
 
-Unlike `Interact` (which needs `Press` or its `Fire` toggles a ladder every
-frame), `Grab` has no condition. `carry.rs` grabs/charges on the `Start<Grab>`
-press edge and places/throws on the `Complete<Grab>` release, with the hold
-duration between as the throw charge — the same `Start`/`Complete` pair ahoy's
-unconditioned `Jump` uses. A short hold (< `CARRY_PLACE_SECS`) is a place with
-zero launch speed; past that the throw speed scales linearly to
-`CARRY_THROW_SPEED` at `CARRY_CHARGE_SECS`.
+*(Phase 19 rewrote this. Grab and throw are now separate actions on separate
+buttons.)*
+
+`Grab` (RMB) and `Throw` (LMB) both have no condition — like ahoy's `Jump`.
+`carry::start_grab` fires on the `Start<Grab>` press edge (grab an aimed crate;
+no-op while carrying). `carry::start_throw` fires on `Start<Throw>` (arm a
+`ThrowCharge`, only while carrying); `release_prop` on `Complete<Throw>` — the
+hold between is the charge. A release with no `ThrowCharge` (an LMB click made
+with free hands — a `Use`) is a no-op, so the `Query<(&Carrying, &ThrowCharge)>`
+And-filter still guards it. Place vs throw is a **duration**, not a button: a
+tap under `CARRY_PLACE_SECS` places with zero launch speed; past that the speed
+scales linearly to `CARRY_THROW_SPEED` at `CARRY_CHARGE_SECS`.
+
+`Throw` shares LMB with `Use` and both fire on a click, but `fire_use` bails
+while `Carrying` and `start_throw`/`release_prop` bail while not — they never
+both apply. `Throw` carries `ActionSettings { require_reset: true }` for the
+same reason `Use` does: LMB is also the cursor re-grab / board-close click.
 
 ### Metallic-under-directional-light gotcha
 
@@ -653,18 +670,20 @@ With `IMMERSIVE_TELEMETRY=1` the log confirms, in one pass (`crates(n=)` counts
 only *liftable* crates now — 4 at rest: the autopilot's normal crate + the 3
 stacking crates): walking into the autopilot crate keeps `crates(moving) 0` and
 its position fixed (push gate); RMB grabs it (`carrying` true, n → 3) and it
-stays carried past the press release; a 2 s RMB hold charges to 1.5 then the
+stays carried past the press release; a 2 s **LMB** hold charges to 1.5 then the
 release throws it (n → 4, the crate arcs to y ~1.2, `moving` → 1, travels
-several metres); a re-grab + tapped RMB places it and it settles. Stacking is
-also seen when the placed crate comes to rest on the thrown one (y ~1.2). The
+several metres); a re-grab + tapped **LMB** places it and it settles. Stacking
+is also seen when the placed crate comes to rest on the thrown one (y ~1.2).
+*(Phase 19: re-verified — same telemetry shape on the new buttons; no
+`use_item` log during the run, so the `fire_use` `Carrying` guard held.)* The
 weight gate (RMB on the 400 kg / 800 kg crates) and ladder reject are the same
 `matches!` and are left to the human pass. `IMMERSIVE_SHOTS=1` adds a
 ghost-crate shot. The `IMMERSIVE_AUTOPILOT=1` ladder walk is unchanged and
 still crests platform A.
 
 Left for a human (no synthetic mouse — the autopilot presses the real
-`MouseButton::Right`, but aiming precisely and *feeling* the charge are
-manual): the half-opacity crate's distance/height (`CARRY_DISTANCE` /
+`MouseButton::Right` / `MouseButton::Left`, but aiming precisely and *feeling*
+the charge are manual): the half-opacity crate's distance/height (`CARRY_DISTANCE` /
 `CARRY_DROP` — it reads a touch large and close); the charge slider and
 `CARRY_CHARGE_SECS`; whether a full throw over/undershoots
 (`CARRY_THROW_SPEED`); the actual climb onto platform B (hop the big crate,
@@ -686,7 +705,7 @@ and the ladder (all rejected); and the `CRATE_*` material look.
 Overhead warehouse lamps, wired to a light switch on platform B's north wall —
 the deck with no ladder, so the crate stack is the only way to reach it. Four
 always-on pillar brackets and the switch's red beacon are all you have; stack
-crates, cross to platform B, press E on the switch, and the warehouse comes on.
+crates, cross to platform B, press RMB (or E) on the switch, and the warehouse comes on.
 
 New module `lights.rs`; classes `FuncLightSwitch` / `LightFixture`
 (`classes.rs`), both on bevy_trenchbroom's built-in `Target` / `Targetable`
@@ -880,11 +899,11 @@ are the human-pass items.
 ## The lockpick arc — Phases 10–16
 
 **Goal:** the demo's first *object you own and then use somewhere else*. Stack
-crates onto platform B → find a wooden crate and a crowbar up there → throw the
-crate off the deck so it smashes open on the concrete (or crowbar it) → pick up
-the lockpick → the locked east-wall door → make the lockpick your active item
-and LMB it open → walk the corridor → the bay → out through the large opening
-to the yard.
+crates onto platform B → find a wooden crate and a crowbar up there →
+LMB-throw the crate off the deck so it smashes open on the concrete (or crowbar
+it) → RMB the lockpick to pocket it → the locked east-wall door → make the
+lockpick your active item and LMB it open → walk the corridor → the bay → out
+through the large opening to the yard.
 
 Phases 10–13 are **done**, and a **minimal Phase 16** (LMB "use active item" —
 lockpick opens the door, crowbar breaks crates) is done so the demo plays end
@@ -1074,7 +1093,8 @@ intended harness additions.
 → `pickup::PlayerPack`, 6×5, centred, `InventoryWindow { open: false }`, `Tab`
 toggles). Single `Camera3d` is bevy_ui's target — no `Camera2d`.
 
-- `pickup::collect_on_interact` → `InventoryCommands::add(**pack,
+- `pickup::collect_on_grab` (Phase 18: was `collect_on_interact`) →
+  `InventoryCommands::add(**pack,
   InventoryItem::new(def.name, def.description, def.cells, def.color))`. **On
   `None` the pickup is left in the world** and `PackFullFlash` shows
   `config::PACK_FULL_MSG` (`ui::update_notice`) — the invariant the quickbar's
@@ -1091,7 +1111,7 @@ toggles). Single `Camera3d` is bevy_ui's target — no `Camera2d`.
   locked+hidden **and** `ContextActivity::<PlayerInput>` active iff
   `in_control = !CursorReleased && no board open`. Switching the *whole*
   `PlayerInput` context off — `Movement`/`Jump`/`Crouch`/`RotateCamera`/
-  `Interact`/`Grab`/`Use` all live in it — is the entire look/move freeze;
+  `Interact`/`Grab`/`Use`/`Throw` all live in it — is the entire look/move freeze;
   `AccumulatedInput` just stops being written and ahoy clears it every frame.
   The specced `stash_input`-slot gate + `PostUpdate` camera hold was **not
   needed**. `player::player_cursor_input` (raw `ButtonInput`, survives the
@@ -1099,9 +1119,10 @@ toggles). Single `Camera3d` is bevy_ui's target — no `Camera2d`.
   releases the cursor, LMB re-grabs.
 - **Trap:** `ContextActivity<C>` is `#[component(immutable)]` — re-insert only
   on a real change or bevy_enhanced_input resets every action every frame.
-- **Trap:** the re-grab / board-closing click must not also fire `Use` — `Use`
-  gains `ActionSettings { require_reset: true, .. }`, BEI's own "hold inert
-  until the input goes idle" for a context that toggles.
+- **Trap:** the re-grab / board-closing click must not also fire `Use` (or
+  `Throw`, Phase 19) — both LMB actions carry `ActionSettings { require_reset:
+  true, .. }`, BEI's own "hold inert until the input goes idle" for a context
+  that toggles.
 
 ### Phase 15 — The quickbar (`src/inventory/quickbar.rs`) ✅
 
@@ -1139,9 +1160,10 @@ A new **library module** — an optional `QuickbarPlugin` beside
 
 ### Phase 16 — Use the active item, LMB ✅ (full)
 
-`use_item::fire_use` (`On<Fire<input::Use>>`) resolves the active item through
-the quickbar — `PlayerPack → (Quickbar, ActiveSlot) → slot → item entity →
-ItemKind` — then dispatches on `ItemKind.0`:
+`use_item::fire_use` (`On<Fire<input::Use>>`) bails immediately while
+`Carrying` (Phase 19: that LMB is a `Throw`), then resolves the active item
+through the quickbar — `PlayerPack → (Quickbar, ActiveSlot) → slot → item
+entity → ItemKind` — and dispatches on `ItemKind.0`:
 
 - `"lockpick"` on a `locked` `DoorSwing` → `locked = false`, prompt →
   `DOOR_PROMPT_OPEN`, **and `InventoryCommands::remove(item)`** — one use.
@@ -1151,7 +1173,9 @@ ItemKind` — then dispatches on `ItemKind.0`:
 - else → silent no-op.
 
 `Use` is `MouseButton::Left` + `GamepadButton::East`, `Press::default()` +
-`ActionSettings { require_reset: true, .. }` (see Phase 14 traps).
+`ActionSettings { require_reset: true, .. }` (see Phase 14 traps). Phase 19
+adds `Throw` on the same LMB binding — the two are kept apart by the `Carrying`
+state, never a keybind.
 
 **The viewmodel** (`viewmodel.rs`) — one `ViewModel` entity is a child of the
 camera (`spawn_viewmodel` on `On<Add, CharacterControllerCameraOf>`) at
@@ -1222,7 +1246,9 @@ total, plus edge/teleport bookkeeping). Two systems in `FixedPostUpdate`:
   and `_MAX_SPEED`, pitched to `FOOTSTEP_LAND_PITCH`. The landing counts as a
   footfall (`phase = 0`).
 - Climbing: a rung clank every `LADDER_RUNG_M` of 3-D climb path, then the
-  branch returns — no walking, no thump.
+  branch returns — no walking, no thump. **(The clank is parked as of
+  2026-09-10 — see the amendment at the end of this phase. The path
+  accumulator still runs; only the `sfx.write` is commented out.)**
 - Walking: horizontal distance into `advance(phase, dist, stride)`; `stride` ×
   `FOOTSTEP_CROUCH_STRIDE_SCALE` when `state.crouching`. Below
   `FOOTSTEP_MIN_SPEED` nothing accumulates (a crate shoving the player is
@@ -1235,7 +1261,7 @@ total, plus edge/teleport bookkeeping). Two systems in `FixedPostUpdate`:
   co-located); a `ChildOf` walk covers a nested collider. `FootstepClips` maps
   it to a set: `Wood` (standing on a wooden crate) has its own
   `footstep{1,2}_wood.wav` pair, `Metal`/`Concrete` share the hard set (no
-  metal assets), the thump/clank are always hard. Telling the concrete floor
+  metal assets), the thump (and the parked clank) always hard. Telling the concrete floor
   from the iron deck (both `Concrete` today) needs the `BrushesAsset` plane
   scan (see the trap below) and its own asset set.
 
@@ -1282,11 +1308,15 @@ deleted. Three tests rewritten.
   volume 0.38–0.52 (`FOOTSTEP_VOLUME` ± jitter), speed 0.89–1.12. **Silence**
   the whole stretch the body is pressed against the ladder wall below
   `FOOTSTEP_MIN_SPEED`.
-- **`IMMERSIVE_AUTOPILOT=1 IMMERSIVE_AUDIO=log`** — walking steps → a block of
-  rung clanks (all clip A) exactly while `climbing=true` and the body's `y` is
-  rising → one soft landing (`speed=0.75`) as it crests onto platform A → walking
-  resumes, alternating. The grab-#2 jump (a >1 m single-tick `y` jump) fires
-  nothing (teleport guard). No panics, no `sfx … muted` errors.
+- **`IMMERSIVE_AUTOPILOT=1 IMMERSIVE_AUDIO=log`** (as verified 2026-09-10, when
+  the clank was still live) — walking steps → a block of rung clanks (all clip
+  A) exactly while `climbing=true` and the body's `y` is rising → one soft
+  landing (`speed=0.75`) as it crests onto platform A → walking resumes,
+  alternating. The grab-#2 jump (a >1 m single-tick `y` jump) fires nothing
+  (teleport guard). No panics, no `sfx … muted` errors. **After the clank was
+  parked (see the amendment below), this run shows zero `sfx` lines for the
+  whole `climbing=true` stretch; the landing and the resumed walk are
+  unchanged.**
 - `cargo test` green: lib 67 (+3 `audio`), `audio_sfx` 4, `inventory_drag` 27,
   `inventory_quickbar` 6, `vehicle_physics` 7, `world_map_travel` 22,
   example-010 22 (+8 `footsteps`, `bob_offset` rewritten). `cargo build
@@ -1296,6 +1326,168 @@ deleted. Three tests rewritten.
 - Observed-but-benign: the first footstep after spawn occasionally logs at
   crouch volume (0.29 vs 0.30 base) — a one-tick `state.crouching` transient
   during the initial physics settle; sub-audible, not chased.
+
+### Amendment (2026-09-10) — the rung clank is parked
+
+On a `cargo run` the climbing cue was the one cue that didn't work. It reused
+the hard-surface footstep wav (`FootstepClips::rung()` → `hard[0]`) at
+`FOOTSTEP_RUNG_VOLUME = 0.5` — louder than a walked step (0.45), and being a
+footstep sample it read as *walking up the ladder*, not boots on rungs. It also
+fired densest of any cue (every `LADDER_RUNG_M` = 0.45 m of path).
+
+Per the user, climbing audio is **off until a real climbing set exists** — the
+same "second sound set" the `surface_of` seam anticipates. The change:
+
+- In `advance_footsteps` the climbing branch keeps its `steps.rung` path
+  accumulation and `continue` (still needed — `grounded` stays `Some` on a
+  ladder, so without the `continue` the walking branch would fire mid-climb).
+  Only the `sfx.write`, the `jitter` call, and the `steps.steps` bump are
+  commented out — so a climb is now fully audio-inert, not silently perturbing
+  the following walk's clip parity.
+- `FootstepClips::rung` and `config::FOOTSTEP_RUNG_VOLUME` go
+  `#[allow(dead_code)]` with a pointer back to the branch. `LADDER_RUNG_M` is
+  still live (the accumulator reads it).
+
+Re-enabling = uncommenting the block and dropping the two `allow`s.
+
+Verified 2026-09-10: `IMMERSIVE_AUTOPILOT=1 IMMERSIVE_AUDIO=log
+IMMERSIVE_TELEMETRY=1` — zero `sfx` lines across the whole `climbing=true` /
+`y`-rising stretch (was a block of clip-A clanks); the crest landing
+(`speed=0.75`) and the resumed alternating walk unchanged; climb telemetry
+(grab #1, toggle-off, jump + air grab #2, crest `y`~6.19) identical.
+`IMMERSIVE_AUTOPILOT=walk` unchanged. `cargo test` / `clippy` clean, no new
+`never used`.
+
+## Phase 18 — Items are picked up with RMB ✅
+
+Picking up a world `item_pickup` (the crowbar; a shattered crate's lockpick)
+moved from **E** (`Interacted`) to **RMB** (`Start<Grab>`), so "grab that
+object" is one gesture whether you carry it (a crate) or pocket it (a tool). E
+keeps doing doors / ladders / the light switch — and, since Phase 20, so does
+RMB (it fires `Fire<Interact>` *and* `Start<Grab>` on one press, disjoint by
+class, so a pickup press still only pockets).
+
+- **One real change:** `pickup::collect_on_interact` → `collect_on_grab`, an
+  `On<Start<Grab>>` observer that reads its target from
+  `Res<InteractionFocus>` (like `carry::start_grab`) instead of the
+  event `entity`. Body unchanged (`InventoryCommands::add` → despawn or
+  `PackFullFlash`), plus an `info!("pickup: collected {item}")` line.
+- **`carry.rs` untouched.** A pickup is `RigidBody::Static`, so
+  `start_grab`'s liftable gate already no-ops on it. The two `Start<Grab>`
+  observers are disjoint (one acts on `ItemPickup`, the other on a liftable
+  `RigidBody::Dynamic`) — observer order is irrelevant.
+- **Guard:** `collect_on_grab` bails if the player has `Carrying` — RMB with a
+  crate in hand is a no-op (Phase 19), and a collect certainly shouldn't fire.
+- Since Phase 19, `release_prop` is on `Complete<Throw>` (LMB), which a collect
+  press (RMB) never raises — no cross-talk at all.
+- `items::prompt_for` ("Pick up Lockpick") left as-is — the crate's RMB prompt
+  ("Hold crate") names no key either, and there's no keybind HUD to contradict.
+  `main.rs` control docs carry the change.
+
+**New devtool `IMMERSIVE_PROPS=grab`** — the collect path had never had
+automated coverage (Phase 3 used a throwaway system; every later `IMMERSIVE_*`
+mode injects items with `AddItem`, skipping the world pickup). `exercise_props`
+spawns one `item_pickup` a crosshair-length ahead at frame 30 (`Interactable`
+explicit — class bases are map-loader-only); `press_devtool_button` (was
+`press_use_key`, now button-per-mode) holds real RMB frames 60–70.
+
+**Verified 2026-09-10:** `IMMERSIVE_PROPS=grab IMMERSIVE_TELEMETRY=1` →
+`devtools: spawned a test pickup`, `pickup: collected crowbar`, telemetry
+`pickups 1 → 2 → 1` and `pack(items 0 → 1)`, `carrying=false` throughout.
+`IMMERSIVE_AUTOPILOT=crates` still runs the full grab / charge-1.5 / throw /
+walk / grab / place chain with `pickups` constant and zero errors. `cargo test`
+green (example-010 22, unchanged — no test covers pickup); clippy no new
+warnings.
+
+## Phase 19 — LMB throws/places a carried crate ✅
+
+The last overloaded control. RMB did grab **and** place **and** charged-throw
+(tap-vs-hold on one button). Now: **RMB only grabs** (a crate with free hands,
+or an item pickup — Phase 18), **LMB handles a crate in hand** — a tap places
+it, a hold+release throws it (the charge slider unchanged). LMB with free hands
+is still `Use`. `Use` and `Throw` share LMB, kept apart by `Carrying`, never a
+keybind.
+
+- **`input.rs`:** new `Throw` action, LMB + gamepad East, unconditioned (like
+  `Grab`) + `ActionSettings { require_reset: true }` (LMB is also the cursor
+  re-grab click — the reason `Use` has it).
+- **`carry.rs`:** `start_grab_or_charge` → `start_grab` (grab only; the
+  already-carrying branch deleted — RMB while carrying is a no-op). New
+  `start_throw` (`On<Start<Throw>>`, `if Carrying { insert ThrowCharge }`).
+  `release_prop` retyped `On<Complete<Grab>>` → `On<Complete<Throw>>` — **body
+  verbatim**; the `Query<(&Carrying, &ThrowCharge)>` And-filter still no-ops a
+  release that armed no charge (a free-hands LMB `Use`).
+- **`use_item.rs`:** `fire_use` gains `if !carrying.is_empty() { return; }` —
+  the mirror of `collect_on_grab`'s guard. Without it, one LMB while carrying
+  would throw *and* fire the item.
+- **`ui.rs`:** carrying prompt → `"LMB to put it down · hold LMB to throw"`.
+- **`config.rs`:** `AutopilotStep` gains `throw: bool` (holds real LMB — the
+  `grab`/RMB twin). `AUTOPILOT_SCRIPT_CRATES` charge + place legs become
+  `throw: true`; the grabs stay `grab: true`. `CARRY_*` doc comments
+  "RMB" → "LMB" where they mean the throw.
+- **`devtools.rs`:** `autopilot_drive` holds real LMB for a `throw` leg.
+
+**Verified 2026-09-10:** `IMMERSIVE_AUTOPILOT=crates IMMERSIVE_TELEMETRY=1` —
+RMB grab (`carrying=true`, n 4→3), LMB charge (`charge` 0→1.5), release throw
+(n→4, `crates(moving)=1`, `max_y` ~1.2), re-grab, LMB tap (charge 0.12 <
+`CARRY_PLACE_SECS`) → place (`moving=0`); **no `use_item` log** the whole run
+(the `fire_use` guard). `IMMERSIVE_PROPS=pick` → `use_item: picked the lock`
+(player not carrying — LMB-use path intact). `IMMERSIVE_PROPS=grab` → item
+pickup still RMB, unaffected. Zero errors. `cargo test` green (example-010 22);
+clippy no new warnings.
+
+## Phase 20 — RMB interacts too (E stays) ✅
+
+Phases 18/19 moved the whole "hands" vocabulary onto the mouse (RMB grab / LMB
+place-throw-use). E was the last holdout — still the only key for a ladder, a
+hinged door, a wall switch. Now **RMB (or E)** fires `Interact`; E keeps
+working.
+
+- **`input.rs`:** `Interact`'s binding list gains `MouseButton::Right`
+  (`[KeyE, GamepadButton::West, MouseButton::Right]`). Keeps `Press::default()`
+  — the RMB hold would otherwise re-toggle the ladder every frame (the E
+  coin-flip trap). **No `require_reset`** — unlike `Use`/`Throw`, RMB never
+  re-grabs the cursor or closes a board (only LMB does), so there's no
+  context-reactivation edge to guard against. Both `Interact` and `Grab` get a
+  doc noting the shared binding.
+- **No new action, no new observer, no dispatch code.** Every interact consumer
+  already hangs off the `Interacted` entity event; RMB just feeds the existing
+  producer (`interact::fire_interact`).
+- **RMB now raises `Fire<Interact>` *and* `Start<Grab>` on one press** — proven
+  harmless: the two land on **disjoint target classes**. A grabbable
+  (`PropCrate` `Dynamic` / `ItemPickup` `Static+Sensor`) has no `Interacted`
+  consumer; an interactable (`FuncLadder`/`PropDoor`/`FuncLightSwitch`, all
+  `Static` or `Kinematic`) is rejected by `carry::start_grab`'s body-type gate
+  and isn't an `ItemPickup`. The extra `commands.trigger` on a crate press
+  lands on nobody.
+- **RMB interacts while carrying a crate too** — falls out for free (RMB-grab
+  is inert while carrying, `Interact` isn't `Carrying`-gated), and matches what
+  E already allowed.
+- **Doc-only:** `main.rs` / `ladder.rs` / `lights.rs` / `door.rs` / `pickup.rs`
+  / `classes.rs` / `ui.rs` climbing prompt — "E" → "RMB (or E)" / "RMB/E".
+- **`devtools.rs` harness:**
+  - `AutopilotScript` newtype → `{ steps, interact_rmb }`; new
+    `IMMERSIVE_AUTOPILOT=rmb` runs `AUTOPILOT_SCRIPT` **verbatim** but taps
+    `MouseButton::Right` on `interact` legs. `Tap::drive` made generic over the
+    button type. The `grab`-release block moved above the interact tap so the
+    tap's RMB press is the frame's last word (every `AUTOPILOT_SCRIPT` leg is
+    `grab: false`, so nothing else shifts).
+  - New `IMMERSIVE_PROPS=rmbdoor`: warp to the door, clear its lock at frame
+    140, hold real RMB frames 150–160 → binding → `Fire<Interact>` →
+    `door::toggle_swing_on_interact`.
+
+**Verified 2026-09-10:**
+- `IMMERSIVE_AUTOPILOT=rmb IMMERSIVE_TELEMETRY=1` — same trace as `=1`: walk
+  into the rungs, no on-contact grab, `x` stalls at −0.65; RMB grab #1
+  (`climbing=true`), RMB toggle-off (drop to mount), jump straight up
+  (`grounded=false`), RMB grab #2 in the air holds (Space still down — the
+  regression case), stop-mid-climb keeps `y` flat with `climbing=true`, resume,
+  crest onto platform A (`grounded=true`, `y` ~6.19). Zero errors.
+- `IMMERSIVE_AUTOPILOT=1` — unchanged (E regression guard).
+- `IMMERSIVE_PROPS=rmbdoor IMMERSIVE_TELEMETRY=1` — `doors(locked=1 → 0)` at
+  frame 140, then `open=0/1 → 1/1` on the RMB press.
+- `IMMERSIVE_PROPS=door` / `=grab`, `IMMERSIVE_AUTOPILOT=crates` — all
+  unchanged. `cargo test` green (example-010 22); clippy no new warnings.
 
 ## Environment notes
 

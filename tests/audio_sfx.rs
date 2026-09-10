@@ -89,14 +89,22 @@ fn a_request_before_the_clip_loads_is_replayed_once() {
 
     app.world_mut().write_message(PlaySfx::new(handle.clone()));
     app.update();
-    assert_eq!(player_count(&mut app), 0, "nothing plays while the clip is absent");
+    assert_eq!(
+        player_count(&mut app),
+        0,
+        "nothing plays while the clip is absent"
+    );
 
     let _ = app
         .world_mut()
         .resource_mut::<Assets<AudioSource>>()
         .insert(&handle, source(WAV));
     app.update();
-    assert_eq!(player_count(&mut app), 1, "the deferred request fires once the clip arrives");
+    assert_eq!(
+        player_count(&mut app),
+        1,
+        "the deferred request fires once the clip arrives"
+    );
 
     app.update();
     assert_eq!(player_count(&mut app), 1, "and not again");

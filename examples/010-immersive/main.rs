@@ -5,22 +5,26 @@
 //! BSP was chosen over Quake 3.
 //!
 //! Controls: WASD move, mouse look, Space jump, Ctrl crouch, Escape to release
-//! the cursor (click to re-grab). Aim at a ladder and press E to lock on — W/S
-//! climb up/down, E or Space lets go. Aim at a crate and press RMB to carry
-//! it; RMB again to place it, or hold RMB to charge a throw (slider under the
-//! crosshair) and release to fling it. Tab opens the grid pack
-//! (`src/inventory/`); number keys 1–9/0 pick the active quickbar slot (an
-//! empty or already-active slot frees your hands), and it's drawn in your
-//! hands. LMB uses the active item — a lockpick on a locked door (one use), a
-//! crowbar on a wooden crate. E opens/closes a hinged door.
+//! the cursor (click to re-grab). RMB (or E) interacts with whatever the
+//! crosshair is on that isn't grabbable — aim at a ladder and press it to lock
+//! on (W/S climb up/down, RMB/E or Space lets go), or open a hinged door, or
+//! flip a wall switch. RMB *grabs* whatever the crosshair is on that is: a
+//! crate to carry, or a loose item to pocket into the grid pack. While carrying
+//! a crate, LMB handles it — a tap sets it down where you're looking (for
+//! stacking), a hold charges a throw (slider under the crosshair) and the
+//! release flings it. Tab opens the pack (`src/inventory/`); number keys 1–9/0
+//! pick the active quickbar slot (an empty or already-active slot frees your
+//! hands), and it's drawn in your hands. With free hands, LMB uses the active
+//! item — a lockpick on a locked door (one use), a crowbar on a wooden crate.
 //!
 //! The loop (Phases 10–16): the warehouse loads lit. Stack crates to reach
 //! platform B, where a wooden crate and a crowbar sit. Carry the crate to the
-//! deck edge and throw it off — it shatters and drops a lockpick. Pick both up
-//! (Tab shows the pack), make the lockpick active (key `1`), LMB the east-wall
-//! door to pick the lock — the lockpick is spent — then E to open it, and walk
-//! the corridor → the bay → out through the large opening to the yard. The
-//! platform-B wall switch still toggles the whole ceiling bank.
+//! deck edge and LMB-throw it off — it shatters and drops a lockpick. RMB to
+//! pick both up (Tab shows the pack), make the lockpick active (key `1`), LMB
+//! the east-wall door to pick the lock — the lockpick is spent — then RMB (or
+//! E) to open it, and walk the corridor → the bay → out through the large
+//! opening to the yard. The platform-B wall switch still toggles the whole
+//! ceiling bank.
 
 mod breakable;
 mod carry;
@@ -70,7 +74,7 @@ fn main() {
     // `spawn_pack` builds the one board with a non-default spec and keeps its
     // entity in `pickup::PlayerPack`.
     .add_plugins((InventoryPlugin::headless(), QuickbarPlugin))
-    // One-shot SFX plumbing (footsteps, landings, ladder rungs — `footsteps.rs`).
+    // One-shot SFX plumbing (footsteps, landings — `footsteps.rs`).
     .add_plugins(bevy_game_bits::audio::SfxPlugin)
     .add_input_context::<input::PlayerInput>()
     // Seeds the lit state (Phase 12 — the warehouse now loads with the main
@@ -91,7 +95,7 @@ fn main() {
     .add_observer(door::toggle_swing_on_interact)
     .add_observer(interact::fire_interact)
     .add_observer(pickup::spawn_visuals)
-    .add_observer(pickup::collect_on_interact)
+    .add_observer(pickup::collect_on_grab)
     .add_observer(pickup::tag_item_kind)
     .add_observer(viewmodel::spawn_viewmodel)
     .add_observer(use_item::fire_use)
@@ -100,7 +104,8 @@ fn main() {
     .add_observer(ladder::attach_on_interact)
     .add_observer(ladder::let_go_on_jump)
     .add_observer(carry::spawn_crates)
-    .add_observer(carry::start_grab_or_charge)
+    .add_observer(carry::start_grab)
+    .add_observer(carry::start_throw)
     .add_observer(carry::release_prop)
     .add_observer(lights::spawn_fixtures)
     .add_observer(lights::setup_switches)
@@ -140,7 +145,7 @@ fn main() {
             (viewmodel::sync_viewmodel, viewmodel::bob_viewmodel).chain(),
         ),
     )
-    // The yaw ease after an E-grab runs here, not in Update, so ahoy's
+    // The yaw ease after an interact-grab runs here, not in Update, so ahoy's
     // Update-schedule camera sync can't clobber it. See `ladder.rs`.
     .add_systems(
         PostUpdate,
@@ -181,17 +186,19 @@ fn main() {
     }
 
     if let Some(mode) = devtools::props_mode() {
-        // Phase 10/13/16: fire `Interacted` at the hinged door / zero a
-        // breakable's health / warp to the corridor door and pick its lock,
-        // on a frame timer, so the door swing, crate shatter and LMB-use path
-        // can be read in `IMMERSIVE_TELEMETRY` without a keyboard.
-        let pick = mode == "pick";
+        // Phase 10/13/16/18/20: fire `Interacted` at the hinged door / zero a
+        // breakable's health / warp to the corridor door and pick its lock /
+        // spawn a test pickup ahead and RMB it / RMB the (unlocked) door to
+        // prove RMB interacts, on a frame timer, so the door swing, crate
+        // shatter, LMB-use, RMB-collect and RMB-interact paths can be read in
+        // `IMMERSIVE_TELEMETRY` without a keyboard.
+        let needs_mouse = mode == "pick" || mode == "grab" || mode == "rmbdoor";
         app.insert_resource(devtools::PropsMode(mode))
             .add_systems(Update, devtools::exercise_props);
-        if pick {
+        if needs_mouse {
             app.add_systems(
                 PreUpdate,
-                devtools::press_use_key
+                devtools::press_devtool_button
                     .after(bevy::input::InputSystems)
                     .before(EnhancedInputSystems::Update),
             );
@@ -203,18 +210,20 @@ fn main() {
         // consume path. `.before(InventorySet::Window)` so the `drag` mode's
         // hand-written `RelativeCursorPosition` (set after PreUpdate's
         // `ui_focus_system`) survives into that frame's inventory systems.
-        app.insert_resource(devtools::InventoryMode(mode)).add_systems(
-            Update,
-            devtools::exercise_inventory.before(InventorySet::Window),
-        );
+        app.insert_resource(devtools::InventoryMode(mode))
+            .add_systems(
+                Update,
+                devtools::exercise_inventory.before(InventorySet::Window),
+            );
     }
 
     if let Some(script) = devtools::autopilot_script() {
         // In PreUpdate, after bevy samples the keyboard/mouse and before
-        // bevy_enhanced_input reads it, so the autopilot's held `KeyE` /
-        // `MouseButton::Right` are seen the same frame. See
-        // `devtools::autopilot_drive`. `IMMERSIVE_AUTOPILOT=1` runs the ladder
-        // walk, `=crates` the crate grab/place/throw walk.
+        // bevy_enhanced_input reads it, so the autopilot's held `KeyE` / RMB /
+        // LMB are seen the same frame. See `devtools::autopilot_drive`.
+        // `IMMERSIVE_AUTOPILOT=1` runs the ladder walk, `=crates` the crate
+        // grab / LMB-place / LMB-throw walk, `=rmb` the same ladder walk but
+        // tapping RMB instead of E (the Phase 20 A/B).
         app.insert_resource(script)
             .init_resource::<devtools::AutopilotAim>()
             .add_systems(

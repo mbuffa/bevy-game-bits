@@ -1,8 +1,13 @@
 //! Movement audio: a step per stride while walking, a heavier thump on
-//! landing, rung clanks while climbing, a quieter/shorter cadence while
-//! crouched. `jsfxr` wavs from `config`, pitched and levelled per cue —
-//! `surface_of` picks a hard set or a wood set (`Surface::Wood`, a wooden
-//! crate underfoot); the thump and the clank always use the hard set.
+//! landing, a quieter/shorter cadence while crouched. `jsfxr` wavs from
+//! `config`, pitched and levelled per cue — `surface_of` picks a hard set or a
+//! wood set (`Surface::Wood`, a wooden crate underfoot); the thump always uses
+//! the hard set.
+//!
+//! Climbing is **silent** — the rung clank is parked (2026-09-10): it reused
+//! the hard footstep wav, which was too loud and read as walking on the
+//! ladder. The path accumulator stays live so `advance_footsteps` can restore
+//! it by uncommenting once a real climbing set exists.
 //!
 //! # Why `Transform` delta, not `LinearVelocity`
 //!
@@ -50,8 +55,8 @@ pub struct Footsteps {
     rung: f32,
 }
 
-/// Clip handles, loaded once at `Startup`. The landing thump and rung clank
-/// always use the hard-surface set (`hard[0]`).
+/// Clip handles, loaded once at `Startup`. The landing thump always uses the
+/// hard-surface set (`hard[0]`); so did the rung clank before it was parked.
 #[derive(Resource)]
 pub struct FootstepClips {
     hard: [Handle<AudioSource>; 2],
@@ -73,6 +78,7 @@ impl FootstepClips {
         self.hard[0].clone()
     }
 
+    #[allow(dead_code)] // parked with the climbing cue; see `advance_footsteps`
     fn rung(&self) -> Handle<AudioSource> {
         self.hard[0].clone()
     }
@@ -104,7 +110,9 @@ pub fn load_footstep_clips(mut commands: Commands, asset_server: Res<AssetServer
 
 /// `.before(AhoySystems::MoveCharacters)` — capture the fall speed before ahoy
 /// grounds the body and zeroes `velocity.y`.
-pub fn stash_fall_speed(mut players: Query<(&LinearVelocity, &mut Footsteps), With<CharacterController>>) {
+pub fn stash_fall_speed(
+    mut players: Query<(&LinearVelocity, &mut Footsteps), With<CharacterController>>,
+) {
     for (velocity, mut steps) in &mut players {
         steps.fall_speed = (-velocity.0.y).max(0.0);
     }
@@ -118,7 +126,12 @@ pub fn advance_footsteps(
     clips: Res<FootstepClips>,
     windows: Query<&bevy_game_bits::inventory::prelude::InventoryWindow>,
     mut players: Query<
-        (&Transform, &CharacterControllerState, &mut Footsteps, Has<Climbing>),
+        (
+            &Transform,
+            &CharacterControllerState,
+            &mut Footsteps,
+            Has<Climbing>,
+        ),
         With<CharacterController>,
     >,
     crates: Query<(), With<PropCrate>>,
@@ -159,19 +172,24 @@ pub fn advance_footsteps(
         }
         steps.was_grounded = grounded;
 
-        // Climbing: clank a rung every `LADDER_RUNG_M` of climb path, then stop
-        // — no walking, no landing.
+        // Climbing: no walking, no landing — and, since 2026-09-10, no sound at
+        // all. The clank is PARKED: it reused the hard-surface footstep wav
+        // (`clips.rung()` -> `hard[0]`), which was too loud and read as a
+        // footstep rather than a rung. The path accumulator below stays live,
+        // so restoring the cue is uncommenting this block (and dropping the two
+        // `#[allow(dead_code)]`s it feeds — `FootstepClips::rung` and
+        // `config::FOOTSTEP_RUNG_VOLUME`) once a real climbing set exists.
         if climbing {
             steps.rung += delta.length();
             while steps.rung >= config::LADDER_RUNG_M {
                 steps.rung -= config::LADDER_RUNG_M;
-                steps.steps = steps.steps.wrapping_add(1);
-                let (speed, vol) = jitter(steps.steps);
-                sfx.write(
-                    PlaySfx::new(clips.rung())
-                        .with_volume(config::FOOTSTEP_RUNG_VOLUME * vol)
-                        .with_speed(speed),
-                );
+                // steps.steps = steps.steps.wrapping_add(1);
+                // let (speed, vol) = jitter(steps.steps);
+                // sfx.write(
+                //     PlaySfx::new(clips.rung())
+                //         .with_volume(config::FOOTSTEP_RUNG_VOLUME * vol)
+                //         .with_speed(speed),
+                // );
             }
             continue;
         }

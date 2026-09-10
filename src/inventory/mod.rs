@@ -136,10 +136,6 @@ use bevy::prelude::*;
 
 pub use commands::{AddItem, InventoryCommands, ResizeInventory};
 pub use config::{InventoryBoardSpec, InventoryConfig, InventoryLayout, InventoryTheme, PanelSide};
-pub use quickbar::{
-    hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin, QuickbarSet,
-    QuickbarStyle,
-};
 pub use drag::{
     begin_drag, end_drag, quick_transfer, reset_interaction, track_cursor, track_drag_target,
     update_drag, InventoryAction, InventoryClicks, InventoryCursor, InventoryDragState,
@@ -147,6 +143,10 @@ pub use drag::{
 };
 pub use grid::{grab_offset, hovered_cell, target_origin, InventoryGrid, ResizeOutcome};
 pub use items::{despawn_item, spawn_item, InventoryItem, InventorySlot};
+pub use quickbar::{
+    hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin, QuickbarSet,
+    QuickbarStyle,
+};
 pub use ui::{
     spawn_inventory, sync_description, sync_item_position, sync_placement_preview,
     sync_selection_outline, sync_window_visibility, InventoryBoard, InventoryCell,
@@ -156,6 +156,10 @@ pub use ui::{
 
 /// Everything you need to build and drive an inventory, in one import.
 pub mod prelude {
+    pub use super::quickbar::{
+        hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin,
+        QuickbarSet, QuickbarStyle,
+    };
     pub use super::{
         despawn_item, grab_offset, hovered_cell, quick_transfer, spawn_inventory, spawn_item,
         target_origin, track_drag_target, AddItem, DefaultInventoryBoard, InventoryAccess,
@@ -165,10 +169,6 @@ pub mod prelude {
         InventoryLayout, InventoryParts, InventoryPlugin, InventoryPreview, InventoryRoot,
         InventorySelection, InventorySet, InventorySlot, InventoryTheme, InventoryTransferTarget,
         InventoryWindow, PanelSide, ResizeInventory,
-    };
-    pub use super::quickbar::{
-        hovered_slot, ActiveSlot, Quickbar, QuickbarAction, QuickbarParts, QuickbarPlugin,
-        QuickbarSet, QuickbarStyle,
     };
 }
 

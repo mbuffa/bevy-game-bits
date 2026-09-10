@@ -11,6 +11,7 @@ use bevy_enhanced_input::prelude::*;
 use bevy_game_bits::inventory::prelude::*;
 
 use crate::breakable::Breakable;
+use crate::carry::Carrying;
 use crate::classes::Interactable;
 use crate::config;
 use crate::door::DoorSwing;
@@ -19,19 +20,24 @@ use crate::interact::InteractionFocus;
 use crate::pickup::{ItemKind, PlayerPack};
 
 /// LMB: apply the active quickbar item to whatever the crosshair is on. Silent
-/// no-op if the hands are free, nothing is focused, or the pairing doesn't
-/// mean anything — the same shape as every `On<Interacted>` consumer.
+/// no-op if a crate is in hand (that LMB is a `Throw` — `carry.rs`), the hands
+/// are free but empty, nothing is focused, or the pairing doesn't mean
+/// anything — the same shape as every `On<Interacted>` consumer.
 #[allow(clippy::too_many_arguments)]
 pub fn fire_use(
     _trigger: On<Fire<input::Use>>,
     focus: Res<InteractionFocus>,
     pack: Res<PlayerPack>,
+    carrying: Query<(), With<Carrying>>,
     boards: Query<(&Quickbar, &ActiveSlot)>,
     kinds: Query<&ItemKind>,
     mut doors: Query<(&mut DoorSwing, &mut Interactable)>,
     mut breakables: Query<&mut Breakable>,
     mut inventory: InventoryCommands,
 ) {
+    if !carrying.is_empty() {
+        return;
+    }
     let Ok((quickbar, active)) = boards.get(**pack) else {
         return;
     };

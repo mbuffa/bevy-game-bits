@@ -52,7 +52,7 @@ impl Default for FuncDoor {
 /// supplies the ladder's AABB. The visible rails-and-rungs mesh that
 /// `setup_ladders` spawns as a child *does* carry a solid collider, so you
 /// can't walk through the ladder itself. Being
-/// `Interactable`, aiming at it shows a prompt and E grabs it, which is how
+/// `Interactable`, aiming at it shows a prompt and RMB/E grabs it, which is how
 /// you mount from the top edge (where you're facing away from the rungs and
 /// the proximity grab deliberately won't fire).
 #[solid_class(base(Interactable))]
@@ -96,7 +96,7 @@ impl Default for PropCrate {
     }
 }
 
-/// A wall-mounted light switch. Aiming at it shows its prompt; E flips every
+/// A wall-mounted light switch. Aiming at it shows its prompt; RMB/E flips every
 /// [`LightFixture`] whose `targetname` matches this switch's `target`
 /// (Quake entity-IO, via bevy_trenchbroom's built-in [`Target`]/[`Targetable`]
 /// base classes — `lights.rs` does the dispatch since 0.13's IO is a
@@ -190,7 +190,7 @@ pub struct PropDoor {
     pub swing: f32,
     /// Swing speed in degrees per second.
     pub speed: f32,
-    /// Mechanically locked: E refuses to open it, and the lock plate glows red.
+    /// Mechanically locked: RMB/E refuses to open it, and the lock plate glows red.
     /// A lockpick clears it (Phase 16). A level author sets `"locked" "1"`.
     pub locked: IntBool,
 }

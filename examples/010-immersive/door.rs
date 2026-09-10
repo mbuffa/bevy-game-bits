@@ -5,7 +5,7 @@
 //!   runs a Closed/Opening/Open/Closing machine that auto-closes after `wait`.
 //! * [`PropDoor`] — a hinged "regular" door (Phase 10). `spawn_swing_doors`
 //!   builds the leaf + handle + lock plate as children and `swing_doors`
-//!   rotates the whole entity about its hinge. **E toggles** it (no auto-close
+//!   rotates the whole entity about its hinge. **RMB (or E) toggles** it (no auto-close
 //!   — a corridor door that shuts behind you is a nuisance), and it refuses
 //!   while `locked`.
 
@@ -295,8 +295,9 @@ pub fn swing_doors(mut doors: Query<(&mut Transform, &mut DoorSwing)>, time: Res
     }
 }
 
-/// E on a hinged door: toggle it, unless it's locked (then just swap the
-/// prompt to say so).
+/// RMB or E on a hinged door: toggle it, unless it's locked (then just swap the
+/// prompt to say so). Safe against RMB also raising `Start<Grab>` — a door is
+/// `Kinematic`, so `carry::start_grab` rejects it.
 pub fn toggle_swing_on_interact(
     trigger: On<Interacted>,
     mut doors: Query<(&mut DoorSwing, &mut Interactable)>,

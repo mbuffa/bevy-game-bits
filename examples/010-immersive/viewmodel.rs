@@ -59,14 +59,21 @@ pub fn sync_viewmodel(
     carrying: Query<(), With<Carrying>>,
     climbing: Query<(), With<Climbing>>,
     windows: Query<&InventoryWindow>,
-    mut holders: Query<(Entity, &mut ViewModelState, &mut Visibility, Option<&Children>), With<ViewModel>>,
+    mut holders: Query<
+        (
+            Entity,
+            &mut ViewModelState,
+            &mut Visibility,
+            Option<&Children>,
+        ),
+        With<ViewModel>,
+    >,
     meshes_children: Query<(), With<ViewModelMesh>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let suppressed =
-        !carrying.is_empty() || !climbing.is_empty() || windows.iter().any(|w| w.open);
+    let suppressed = !carrying.is_empty() || !climbing.is_empty() || windows.iter().any(|w| w.open);
 
     let active_def = pack
         .as_ref()
@@ -75,7 +82,11 @@ pub fn sync_viewmodel(
         .and_then(|item| kinds.get(item).ok())
         .and_then(|kind| items::lookup(kind.0));
 
-    let wanted = if suppressed { None } else { active_def.map(|d| d.key) };
+    let wanted = if suppressed {
+        None
+    } else {
+        active_def.map(|d| d.key)
+    };
 
     for (holder, mut state, mut visibility, children) in &mut holders {
         if state.0 != wanted {
@@ -180,7 +191,11 @@ mod tests {
             let o = bob_offset(phase, 2.0); // speed_scale clamped to 1.0
             assert!(o.x.abs() <= max + 1e-6, "x {} at {phase}", o.x);
             assert!(o.y.abs() <= max + 1e-6, "y {} at {phase}", o.y);
-            assert!(o.y <= 1e-6, "vertical bob should only ever dip, got {}", o.y);
+            assert!(
+                o.y <= 1e-6,
+                "vertical bob should only ever dip, got {}",
+                o.y
+            );
         }
     }
 

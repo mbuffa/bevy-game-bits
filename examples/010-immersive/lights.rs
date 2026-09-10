@@ -5,8 +5,8 @@
 //! *off*. Four bracket lamps — one on each platform pillar — stay lit (on a
 //! `targetname` no switch drives), and the switch carries its own red
 //! `PointLight` on platform B's wall as a beacon. Stack crates onto platform B
-//! (it has no ladder — that's Phase 8), walk to the switch, press E, and the
-//! warehouse comes on.
+//! (it has no ladder — that's Phase 8), walk to the switch, press RMB (or E),
+//! and the warehouse comes on.
 //!
 //! | system / observer | when | job |
 //! |---|---|---|
@@ -337,8 +337,9 @@ pub fn setup_switches(
     }
 }
 
-/// E on a switch: flip it, push the new state to every `LightFixture` whose
-/// `targetname` matches this switch's `target`, and swap the prompt.
+/// RMB or E on a switch: flip it, push the new state to every `LightFixture`
+/// whose `targetname` matches this switch's `target`, and swap the prompt.
+/// Safe against RMB also raising `Start<Grab>` — a switch brush is `Static`.
 pub fn toggle_on_interact(
     trigger: On<Interacted>,
     mut switches: Query<(&mut SwitchState, &mut Interactable, &Target)>,

@@ -54,18 +54,30 @@ fn board_with_bar(app: &mut App, slots: usize) -> Entity {
 }
 
 fn spawn_on_board(app: &mut App, board: Entity, item: InventoryItem, origin: UVec2) -> Entity {
-    let entity = app
-        .world_mut()
-        .run_system_once(
-            move |mut commands: Commands,
-                  mut boards: Query<(&mut InventoryGrid, &InventoryConfig, &InventoryTheme)>| {
-                let (mut grid, config, theme) = boards.get_mut(board).unwrap();
-                let (config, theme) = (config.clone(), theme.clone());
-                spawn_item(&mut commands, board, &mut grid, &config, &theme, item.clone(), origin)
+    let entity =
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands,
+                      mut boards: Query<(
+                    &mut InventoryGrid,
+                    &InventoryConfig,
+                    &InventoryTheme,
+                )>| {
+                    let (mut grid, config, theme) = boards.get_mut(board).unwrap();
+                    let (config, theme) = (config.clone(), theme.clone());
+                    spawn_item(
+                        &mut commands,
+                        board,
+                        &mut grid,
+                        &config,
+                        &theme,
+                        item.clone(),
+                        origin,
+                    )
                     .expect("fixture fits")
-            },
-        )
-        .unwrap();
+                },
+            )
+            .unwrap();
     app.update();
     entity
 }
@@ -219,7 +231,10 @@ fn a_drag_released_over_a_slot_assigns_it() {
     ));
     // The item never left the board.
     assert_eq!(app.world().get::<ChildOf>(item).unwrap().parent(), board);
-    assert_eq!(app.world().get::<InventorySlot>(item).unwrap().0, UVec2::new(0, 0));
+    assert_eq!(
+        app.world().get::<InventorySlot>(item).unwrap().0,
+        UVec2::new(0, 0)
+    );
 }
 
 #[test]
@@ -253,10 +268,8 @@ fn a_double_click_activates_the_items_slot() {
 
     // A board double-click fires InventoryAction::Activated, which select_slot
     // promotes to activating the slot.
-    app.world_mut().write_message(bevy_game_bits::inventory::InventoryAction::Activated {
-        board,
-        item,
-    });
+    app.world_mut()
+        .write_message(bevy_game_bits::inventory::InventoryAction::Activated { board, item });
     app.update();
 
     assert_eq!(active(&app, board), Some(0));

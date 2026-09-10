@@ -107,12 +107,12 @@ pub const AIR_ACCEL_HZ: f32 = 1.5;
 
 // --- Crates (carryable props) ----------------------------------------------
 //
-// Metal crates the player grabs with RMB and stacks to reach platform B (deck
-// top 4.88 m). The map pre-places one big ~800 kg crate (1.6 m, too heavy to
-// lift) against the deck's south edge; the player hops onto it and stacks two
-// loose 0.8 m crates on top (1.6 + 0.8 + 0.8 = 3.2 m, + a 1.8 m jump clears the
-// deck). `PropCrate::size` / `mass` are per-entity; these are the defaults.
-// See SPEC.md Phase 8.
+// Metal crates the player grabs with RMB (then throws/places with LMB) and
+// stacks to reach platform B (deck top 4.88 m). The map pre-places one big
+// ~800 kg crate (1.6 m, too heavy to lift) against the deck's south edge; the
+// player hops onto it and stacks two loose 0.8 m crates on top
+// (1.6 + 0.8 + 0.8 = 3.2 m, + a 1.8 m jump clears the deck). `PropCrate::size`
+// / `mass` are per-entity; these are the defaults. See SPEC.md Phase 8 / 19.
 
 /// Default edge length (meters) of a crate cube.
 pub const CRATE_SIZE: f32 = 0.8;
@@ -142,10 +142,10 @@ pub const CRATE_ROUGHNESS: f32 = 0.4;
 
 // --- Carrying -------------------------------------------------------------
 
-/// Heaviest `Mass` (kg) RMB will lift. Between `CRATE_MASS` and the "too
-/// heavy" crates so the weight gate is demonstrable. Static brushes (ladders,
-/// walls) and kinematic bodies (doors) are excluded by body *type* before
-/// mass is ever consulted.
+/// Heaviest `Mass` (kg) an RMB grab will lift. Between `CRATE_MASS` and the
+/// "too heavy" crates so the weight gate is demonstrable. Static brushes
+/// (ladders, walls) and kinematic bodies (doors) are excluded by body *type*
+/// before mass is ever consulted.
 pub const CARRY_MAX_MASS: f32 = 40.0;
 
 /// How far (meters) in front of the camera a held crate floats, and how far
@@ -157,11 +157,11 @@ pub const CARRY_DROP: f32 = 0.4;
 /// Alpha a held crate is drawn at (ghost preview).
 pub const CARRY_ALPHA: f32 = 0.5;
 
-/// Seconds of held RMB for a fully-charged throw.
+/// Seconds of held LMB (while carrying) for a fully-charged throw.
 pub const CARRY_CHARGE_SECS: f32 = 1.5;
 
-/// RMB held shorter than this counts as a *place* (drop straight down, no
-/// launch speed) rather than a weak throw — so stacking is precise.
+/// An LMB press held shorter than this counts as a *place* (drop straight
+/// down, no launch speed) rather than a weak throw — so stacking is precise.
 pub const CARRY_PLACE_SECS: f32 = 0.2;
 
 /// Launch speed (m/s) of a fully-charged throw; scaled by the charge ratio.
@@ -502,18 +502,19 @@ pub const VIEWMODEL_BOB_AMPLITUDE: f32 = 0.014;
 // --- Footsteps (Phase 17) ----------------------------------------------------
 //
 // Movement audio: a step per stride while walking, a heavier thump on landing,
-// rung clanks while climbing, quieter/faster cadence while crouched. `footsteps.rs`
-// owns it; the same `Footsteps.phase` accumulator also drives the viewmodel
-// bob (`viewmodel.rs`), so the step lands at the bottom of the dip. All four
-// cues come from the same two `jsfxr` wavs — `FOOTSTEP_WAV_A`/`_B` — pitched
-// and levelled per cue. `surface_of` resolves what's underfoot into a
+// quieter/faster cadence while crouched. `footsteps.rs` owns it; the same
+// `Footsteps.phase` accumulator also drives the viewmodel bob (`viewmodel.rs`),
+// so the step lands at the bottom of the dip. The cues come from the same two
+// `jsfxr` wavs — `FOOTSTEP_WAV_A`/`_B` — pitched and levelled per cue.
+// (Climbing had a rung clank too; it's parked — see `footsteps.rs`.)
+// `surface_of` resolves what's underfoot into a
 // `Surface`, but every variant maps to the same pair today: the seam is there
 // so a second sound set is new assets plus a match arm, not a rewrite. See
 // SPEC.md Phase 17.
 
 /// The alternating footstep pair (jsfxr). `A` plays on even steps, `B` on odd;
-/// the landing thump reuses hard-surface `A` pitched down, a rung clank
-/// reuses it too. The `_WOOD` pair is `Surface::Wood` (standing on a wooden
+/// the landing thump reuses hard-surface `A` pitched down (the parked rung
+/// clank did too). The `_WOOD` pair is `Surface::Wood` (standing on a wooden
 /// crate) — the second sound set the `surface_of` seam was built for.
 pub const FOOTSTEP_WAV_A: &str = "sfx/jsfxr/footstep1.wav";
 pub const FOOTSTEP_WAV_B: &str = "sfx/jsfxr/footstep2.wav";
@@ -546,8 +547,12 @@ pub const FOOTSTEP_PITCH_JITTER: f32 = 0.12;
 pub const FOOTSTEP_VOLUME_JITTER: f32 = 0.15;
 
 /// Metres climbed (3-D path, so the x/z ease counts too) between rung clanks.
+/// Still read by `advance_footsteps`' path accumulator even with the clank
+/// parked.
 pub const LADDER_RUNG_M: f32 = 0.45;
-/// Linear volume of a rung clank.
+/// Linear volume of a rung clank. Parked (see `footsteps.rs`); restore with a
+/// real climbing set.
+#[allow(dead_code)]
 pub const FOOTSTEP_RUNG_VOLUME: f32 = 0.5;
 
 /// Downward speed (m/s) at which a landing starts to be audible at all. The
@@ -567,12 +572,12 @@ pub const FOOTSTEP_LAND_PITCH: f32 = 0.75;
 // --- Devtools ------------------------------------------------------------
 
 /// A leg of the `IMMERSIVE_AUTOPILOT` script: hold this movement input, turn
-/// at this yaw rate (degrees/sec), hold the real `Space` key down for the
-/// whole leg if `jump` (so consecutive `jump` legs are one continuous hold),
-/// and — if `interact` — tap the real E key for `AUTOPILOT_TAP_SECS` (starting
-/// the frame something focuses) — all for `duration` seconds. See `devtools.rs`
-/// for why this is the way this example can verify live movement on a machine
-/// where synthetic keyboard/mouse input is blocked.
+/// at this yaw rate (degrees/sec), hold the real `Space` / RMB / LMB down for
+/// the whole leg if `jump` / `grab` / `throw` (so consecutive such legs are
+/// one continuous hold), and — if `interact` — tap the real E key for
+/// `AUTOPILOT_TAP_SECS` (starting the frame something focuses) — all for
+/// `duration` seconds. See `devtools.rs` for why this is the way this example
+/// can verify live movement on a machine where synthetic input is blocked.
 pub struct AutopilotStep {
     pub duration: f32,
     pub movement: bevy::math::Vec2,
@@ -580,9 +585,13 @@ pub struct AutopilotStep {
     pub interact: bool,
     pub jump: bool,
     /// Hold the real RMB (`MouseButton::Right`) down for the whole leg, like
-    /// `jump` holds `Space` — so a leg's `duration` *is* the throw-charge
-    /// time. A run of `grab` legs is one continuous hold.
+    /// `jump` holds `Space` — so a run of `grab` legs is one continuous hold.
+    /// RMB now only *grabs* a crate (Phase 19); a brief `grab` leg = one grab.
     pub grab: bool,
+    /// Hold the real LMB (`MouseButton::Left`) down for the whole leg — the
+    /// `grab` twin for the crate *throw*. A leg's `duration` is the throw
+    /// charge; a leg shorter than `CARRY_PLACE_SECS` is a place. See Phase 19.
+    pub throw: bool,
     /// Absolute camera pitch (degrees, negative = look down) held for the leg.
     /// The crate script needs this: a crate is 0.8 m tall and sits on the
     /// floor, so an eye-level ray sails over it — you look down to aim at one.
@@ -641,6 +650,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Grab #1 — already parked in front of the rungs with `focus` resolved, so
@@ -655,6 +665,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: true,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Press E on the rungs: toggle off. `climbing` -> false, gravity drops the
@@ -666,6 +677,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: true,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // ...straight down to the floor (`grounded` true, `y` ~0.9) at the mount —
@@ -677,6 +689,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Jump straight up from the mount: press Space (the `Start<Jump>` edge) and
@@ -689,6 +702,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: true,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Grab #2 — still airborne, Space still held (so `jumped` is live,
@@ -705,6 +719,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: true,
         jump: true,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Climb partway (Space released now). From the grab-#2 height (`y` ~1.4) at
@@ -716,6 +731,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Let go mid-climb. The stop-when-released check: `y` must be *constant*
@@ -729,6 +745,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Resume: the climb restarts from where it hung, reaches the top and the
@@ -741,6 +758,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // Hold on the platform.
@@ -751,6 +769,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
 ];
@@ -760,9 +779,9 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
 /// *behind* the spawn (clear of the ladder walk); the script turns 180° first,
 /// then drives with pure forward/back movement (no yaw). It *does* pitch the
 /// view down — a floor crate is below an eye-level ray — via
-/// `AutopilotStep::pitch_deg`. `grab` holds the real RMB for the whole leg
-/// (like `jump` holds Space), so a `grab` leg's `duration` is the throw charge
-/// and a run of `grab` legs is one press.
+/// `AutopilotStep::pitch_deg`. `grab` holds the real RMB for a leg (a plain
+/// grab), `throw` holds the real LMB (the charge/place — a leg's `duration` is
+/// the charge time, and a leg under `CARRY_PLACE_SECS` is a place).
 ///
 /// `crates(n=)` in telemetry counts only *liftable* crates (mass <=
 /// `CARRY_MAX_MASS`) — 4 at rest here: the autopilot's normal crate + the 3
@@ -770,21 +789,20 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
 /// count.
 ///
 /// Legs and their binary signals (read from `IMMERSIVE_TELEMETRY`):
-///  1. walk into the crate, no RMB — `crates(moving)` stays 0 and its position
-///     barely changes: `PLAYER_PUSH_MASS` is below a resting crate's friction
-///     impulse, so the pile doesn't budge.
+///  1. walk into the crate, no button — `crates(moving)` stays 0 and its
+///     position barely changes: `PLAYER_PUSH_MASS` is below a resting crate's
+///     friction impulse, so the pile doesn't budge.
 ///  2-3. RMB on the (now focused) crate — `carrying` goes true (n -> 3) and
-///     *stays* true across the release (`release_prop` no-ops without a
-///     `ThrowCharge`).
-///  4-5. RMB down and HELD past `CARRY_CHARGE_SECS` (`charge` climbs, caps at
+///     *stays* true across the release (RMB while carrying is a no-op now).
+///  4-5. LMB down and HELD past `CARRY_CHARGE_SECS` (`charge` climbs, caps at
 ///     1.5), then release — a full throw: n back to 4, `crates(moving)` -> 1,
 ///     the crate arcs several metres.
-///  6-9. walk to where it landed, RMB grab, RMB tap (< `CARRY_PLACE_SECS`) —
+///  6-10. walk to where it landed, RMB grab, LMB tap (< `CARRY_PLACE_SECS`) —
 ///     a place: `carrying` -> false, the crate drops straight down and settles.
 ///
 /// The weight gate (RMB on the 400 kg crate leaves `carrying` false) and the
 /// ladder reject share the one `matches!(.. RigidBody::Dynamic .. mass <=
-/// CARRY_MAX_MASS)` in `start_grab_or_charge`; both are left to the human pass
+/// CARRY_MAX_MASS)` in `start_grab`; both are left to the human pass
 /// (the immovable crate blocks the autopilot's aisle, and a crate placed at
 /// your feet sits in the look-down ray's blind spot until you step back — a
 /// real quirk, not a bug).
@@ -803,6 +821,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -20.0,
     },
     // 1. Walk into the normal crate, looking down at it. Push-mass check:
@@ -816,6 +835,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -45.0,
     },
     // 2-3. Grab (RMB press then release). `carrying` -> true (n 3), stays true
@@ -827,6 +847,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: true,
+        throw: false,
         pitch_deg: -45.0,
     },
     AutopilotStep {
@@ -836,9 +857,10 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -18.0,
     },
-    // 4-5. Arm + fully charge a throw (RMB held past `CARRY_CHARGE_SECS`), then
+    // 4-5. Arm + fully charge a throw (LMB held past `CARRY_CHARGE_SECS`), then
     //    release: a hard throw. `charge` climbs to 1.5, then n -> 4,
     //    `moving` -> 1, the crate arcs several metres.
     AutopilotStep {
@@ -847,7 +869,8 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
-        grab: true,
+        grab: false,
+        throw: true,
         pitch_deg: -12.0,
     },
     AutopilotStep {
@@ -857,6 +880,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -12.0,
     },
     // 6-7. Walk to where the thrown crate landed and settle on it (no RMB) so
@@ -870,6 +894,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -40.0,
     },
     AutopilotStep {
@@ -879,10 +904,11 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -45.0,
     },
-    // 8-9. Grab it (press/release), then TAP RMB (< `CARRY_PLACE_SECS`): a
-    //    place. `carrying` briefly true then false; the crate drops straight
+    // 8-10. Grab it (RMB press/release), then TAP LMB (< `CARRY_PLACE_SECS`):
+    //    a place. `carrying` briefly true then false; the crate drops straight
     //    down and settles (`moving` -> 0).
     AutopilotStep {
         duration: 0.6,
@@ -891,6 +917,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: true,
+        throw: false,
         pitch_deg: -45.0,
     },
     AutopilotStep {
@@ -900,6 +927,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -18.0,
     },
     AutopilotStep {
@@ -908,7 +936,8 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         yaw_rate: 0.0,
         interact: false,
         jump: false,
-        grab: true,
+        grab: false,
+        throw: true,
         pitch_deg: -18.0,
     },
     AutopilotStep {
@@ -918,6 +947,7 @@ pub const AUTOPILOT_SCRIPT_CRATES: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: -18.0,
     },
 ];
@@ -939,6 +969,7 @@ pub const AUTOPILOT_SCRIPT_WALK: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     AutopilotStep {
@@ -948,6 +979,7 @@ pub const AUTOPILOT_SCRIPT_WALK: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     AutopilotStep {
@@ -957,6 +989,7 @@ pub const AUTOPILOT_SCRIPT_WALK: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
     // End on STILL — `autopilot_drive` holds the last leg forever, so it must
@@ -968,6 +1001,7 @@ pub const AUTOPILOT_SCRIPT_WALK: &[AutopilotStep] = &[
         interact: false,
         jump: false,
         grab: false,
+        throw: false,
         pitch_deg: 0.0,
     },
 ];

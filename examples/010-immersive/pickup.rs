@@ -8,14 +8,26 @@
 //! (`inventory::quickbar`). A pickup is only despawned once it's actually in
 //! the pack: a full pack leaves the item in the world and flashes
 //! [`PackFullFlash`].
+//!
+//! **RMB.** Collecting is on the [`Grab`] press edge (`Start<Grab>`) — the same
+//! button that grabs a `PropCrate` in `carry.rs` — so "grab that object" is one
+//! gesture whether you carry it or pocket it. RMB (and E) *also* fire
+//! `Interacted` for doors / ladders / switches, but those classes aren't
+//! grabbable and a pickup isn't interactable, so a press only ever does one
+//! thing. The two `Start<Grab>` observers are likewise disjoint: `carry` acts
+//! on a liftable `RigidBody::Dynamic`, this one on an [`ItemPickup`] (which is
+//! `RigidBody::Static`).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use bevy_enhanced_input::prelude::Start;
 use bevy_game_bits::inventory::prelude::*;
 
+use crate::carry::Carrying;
 use crate::classes::{Interactable, ItemPickup};
 use crate::config;
-use crate::interact::Interacted;
+use crate::input::Grab;
+use crate::interact::InteractionFocus;
 use crate::items::{self, ItemShape};
 
 /// The board entity `main.rs::spawn_pack` built as the player's pack. Every
@@ -25,7 +37,7 @@ use crate::items::{self, ItemShape};
 pub struct PlayerPack(pub Entity);
 
 /// Seconds left on the "pack is full" notice (`ui::update_notice` renders it,
-/// `pickup::collect_on_interact` sets it). `0.0` = not showing.
+/// `pickup::collect_on_grab` sets it). `0.0` = not showing.
 #[derive(Resource, Default)]
 pub struct PackFullFlash(pub f32);
 
@@ -101,19 +113,30 @@ pub fn spawn_visuals(
     ));
 }
 
-/// E on a pickup: add its catalogue item to the pack. Only despawns the world
-/// pickup once the item is actually in the grid — a full pack leaves it where
-/// it lies and flashes [`PackFullFlash`], which is the invariant the
-/// quickbar's "room in the pack first" rule stands on.
-pub fn collect_on_interact(
-    trigger: On<Interacted>,
+/// RMB on a pickup: add its catalogue item to the pack. Reads the aimed entity
+/// from [`InteractionFocus`] (like `carry::start_grab_or_charge`), not an event
+/// target. Only despawns the world pickup once the item is actually in the grid
+/// — a full pack leaves it where it lies and flashes [`PackFullFlash`], which is
+/// the invariant the quickbar's "room in the pack first" rule stands on.
+#[allow(clippy::too_many_arguments)]
+pub fn collect_on_grab(
+    _press: On<Start<Grab>>,
+    focus: Res<InteractionFocus>,
+    carrying: Query<(), With<Carrying>>,
     pickups: Query<&ItemPickup>,
     pack: Res<PlayerPack>,
     mut inventory: InventoryCommands,
     mut flash: ResMut<PackFullFlash>,
     mut commands: Commands,
 ) {
-    let Ok(pickup) = pickups.get(trigger.entity) else {
+    // RMB while a crate is in hand arms a throw (`carry.rs`), never a collect.
+    if !carrying.is_empty() {
+        return;
+    }
+    let Some((target, _)) = focus.0 else {
+        return;
+    };
+    let Ok(pickup) = pickups.get(target) else {
         return;
     };
     let item = match items::lookup(&pickup.item) {
@@ -127,7 +150,8 @@ pub fn collect_on_interact(
     };
     match inventory.add(**pack, item) {
         Some(_) => {
-            commands.entity(trigger.entity).despawn();
+            info!("pickup: collected {}", pickup.item);
+            commands.entity(target).despawn();
         }
         None => {
             flash.0 = config::PACK_FULL_SECS;

@@ -210,10 +210,7 @@ impl Plugin for QuickbarPlugin {
                     .after(InventorySet::Sync),
             )
             .add_systems(Update, build_quickbar_ui.in_set(QuickbarSet::Build))
-            .add_systems(
-                Update,
-                prune_and_assign_slots.in_set(QuickbarSet::Assign),
-            )
+            .add_systems(Update, prune_and_assign_slots.in_set(QuickbarSet::Assign))
             .add_systems(Update, select_slot.in_set(QuickbarSet::Input))
             .add_systems(Update, sync_quickbar_ui.in_set(QuickbarSet::Sync))
             .add_systems(
@@ -294,9 +291,7 @@ pub fn build_quickbar_ui(
             cells.push(cell);
         }
 
-        commands
-            .entity(board)
-            .insert(QuickbarParts { root, cells });
+        commands.entity(board).insert(QuickbarParts { root, cells });
     }
 }
 
@@ -421,7 +416,14 @@ fn set_active(
         return;
     }
     active.0 = target;
-    match target.and_then(|slot| quickbar.slots.get(slot).copied().flatten().map(|i| (slot, i))) {
+    match target.and_then(|slot| {
+        quickbar
+            .slots
+            .get(slot)
+            .copied()
+            .flatten()
+            .map(|i| (slot, i))
+    }) {
         Some((slot, item)) => actions.write(QuickbarAction::Activated { board, slot, item }),
         None => actions.write(QuickbarAction::Deactivated { board }),
     };

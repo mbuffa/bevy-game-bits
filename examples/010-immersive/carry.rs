@@ -1,14 +1,21 @@
-//! RMB grab / carry / charged-throw for `PropCrate` metal crates — the repo's
-//! first dynamic rigid bodies, and the way onto platform B (stack them into a
-//! staircase, since it has no ladder). See SPEC.md Phase 8.
+//! Grab / carry / place / charged-throw for `PropCrate` metal crates — the
+//! repo's first dynamic rigid bodies, and the way onto platform B (stack them
+//! into a staircase, since it has no ladder). See SPEC.md Phase 8 / 19.
+//!
+//! **Controls:** RMB (`Grab`) grabs an aimed crate; while carrying, RMB does
+//! nothing and **LMB (`Throw`)** handles it — a tap places it ahead, a
+//! hold+release throws it (the charge builds in between). LMB with free hands
+//! is `Use` (`use_item.rs`), which no-ops while carrying, so LMB never means
+//! both.
 //!
 //! | system / observer | when | job |
 //! |---|---|---|
 //! | `setup_crate_assets` | `Startup` | one shared mesh + solid/ghost materials |
 //! | `spawn_crates` | `On<Add, PropCrate>` | dynamic body, cuboid collider, `Mass`, friction/damping |
-//! | `start_grab_or_charge` | `On<Start<Grab>>` | RMB press: grab the aimed crate, or (already carrying) begin charging a throw |
+//! | `start_grab` | `On<Start<Grab>>` | RMB press, hands free: grab the aimed crate |
+//! | `start_throw` | `On<Start<Throw>>` | LMB press while carrying: arm a `ThrowCharge` |
 //! | `advance_charge` | `Update` | tick `ThrowCharge` up to `CARRY_CHARGE_SECS` |
-//! | `release_prop` | `On<Complete<Grab>>` | RMB release *while charging*: place (tap) or throw (held) |
+//! | `release_prop` | `On<Complete<Throw>>` | LMB release while carrying: place (tap) or throw (held) |
 //! | `hold_prop` | `PostUpdate`, before `TransformSystems::Propagate` | park the held crate in front of the camera |
 //!
 //! **Grab gate.** Only a `RigidBody::Dynamic` body at or under
@@ -37,7 +44,7 @@ use bevy_enhanced_input::prelude::{Complete, Start};
 
 use crate::classes::PropCrate;
 use crate::config;
-use crate::input::Grab;
+use crate::input::{Grab, Throw};
 use crate::interact::InteractionFocus;
 
 /// Shared crate materials, built once at `Startup`. `ghost` is the
@@ -59,11 +66,11 @@ pub struct Carrying {
 #[derive(Component)]
 pub struct Carried;
 
-/// On the player between an RMB press *made while already carrying* and its
-/// release: seconds held so far, capped at `config::CARRY_CHARGE_SECS`, and
-/// the value the HUD slider shows. Absent means "not charging" —
-/// `release_prop` no-ops without it, so the release that merely ends the
-/// initial grab press doesn't fling the crate straight back out.
+/// On the player between an LMB press *made while carrying* and its release:
+/// seconds held so far, capped at `config::CARRY_CHARGE_SECS`, and the value
+/// the HUD slider shows. Absent means "not charging" — `release_prop` no-ops
+/// without it, so an LMB click made with free hands (a `Use`) can't fling a
+/// crate.
 #[derive(Component)]
 pub struct ThrowCharge(pub f32);
 
@@ -114,9 +121,9 @@ pub fn spawn_crates(
     ));
 }
 
-/// RMB press: grab the aimed crate, or — if a crate is already in hand — start
-/// charging a throw.
-pub fn start_grab_or_charge(
+/// RMB press: grab the aimed crate. A no-op while already carrying (putting a
+/// crate down is `Throw` / LMB — see `start_throw` / `release_prop`).
+pub fn start_grab(
     press: On<Start<Grab>>,
     mut commands: Commands,
     focus: Res<InteractionFocus>,
@@ -127,7 +134,6 @@ pub fn start_grab_or_charge(
     let player = press.context;
 
     if matches!(carriers.get(player), Ok(true)) {
-        commands.entity(player).insert(ThrowCharge(0.0));
         return;
     }
 
@@ -154,6 +160,19 @@ pub fn start_grab_or_charge(
     commands.entity(player).insert(Carrying { prop: target });
 }
 
+/// LMB press while carrying: arm the throw charge. Guarded on `Carrying` so an
+/// LMB click with free hands (a `Use`) never strands a `ThrowCharge`.
+pub fn start_throw(
+    press: On<Start<Throw>>,
+    mut commands: Commands,
+    carriers: Query<Has<Carrying>>,
+) {
+    let player = press.context;
+    if matches!(carriers.get(player), Ok(true)) {
+        commands.entity(player).insert(ThrowCharge(0.0));
+    }
+}
+
 pub fn advance_charge(time: Res<Time>, mut charging: Query<&mut ThrowCharge>) {
     let dt = time.delta_secs();
     for mut charge in &mut charging {
@@ -161,12 +180,12 @@ pub fn advance_charge(time: Res<Time>, mut charging: Query<&mut ThrowCharge>) {
     }
 }
 
-/// RMB release. Only fires the place/throw if a `ThrowCharge` is present (the
-/// press that armed it was made while carrying); the release that ends the
-/// initial grab is a no-op. A near-zero charge places the crate straight down;
-/// a full charge launches it along the view at `CARRY_THROW_SPEED`.
+/// LMB release. Fires only if a `ThrowCharge` is present — an LMB click made
+/// with free hands (a `Use`) armed none, so it's a no-op here. A near-zero
+/// charge (a tap) places the crate straight down; a full charge launches it
+/// along the view at `CARRY_THROW_SPEED`.
 pub fn release_prop(
-    release: On<Complete<Grab>>,
+    release: On<Complete<Throw>>,
     mut commands: Commands,
     assets: Res<CrateAssets>,
     spatial: SpatialQuery,

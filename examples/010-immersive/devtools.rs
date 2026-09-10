@@ -9,8 +9,9 @@
 //! axis does, so `ladder::stash_input` can tell "let go" from "still holding".
 //! The
 //! `interact` and `jump` legs go one step further and press the real
-//! `KeyCode::KeyE` / `KeyCode::Space` in `ButtonInput`, so the whole binding →
-//! `Press` -> `fire_interact` path (E) and binding -> ahoy `Jump` /
+//! interact button (`KeyCode::KeyE`, or `MouseButton::Right` under
+//! `IMMERSIVE_AUTOPILOT=rmb`) / `KeyCode::Space` in `ButtonInput`, so the whole
+//! binding → `Press` -> `fire_interact` path (RMB/E) and binding -> ahoy `Jump` /
 //! `Start<Jump>` path (Space) are under test — those *are* the real input paths
 //! end to end, which is how this harness can catch an `Interact` action that
 //! fires every frame instead of once per press, or a jump pressed *before* a
@@ -18,13 +19,19 @@
 //!
 //! All of this is opt-in via environment variables, checked once at
 //! startup in `main.rs`, so a normal `cargo run` behaves exactly as before:
-//! - `IMMERSIVE_AUTOPILOT=1` / `=crates` / `=walk` — walk a scripted route automatically.
+//! - `IMMERSIVE_AUTOPILOT=1` / `=crates` / `=walk` / `=rmb` — walk a scripted route
+//!   automatically (`=rmb` is `=1`'s ladder walk, tapping RMB not E — Phase 20).
 //! - `IMMERSIVE_TELEMETRY=1` — log position/speed/grounded/focus/lights periodically.
 //! - `IMMERSIVE_SHOTS=1` — take in-app screenshots at scripted checkpoints.
 //! - `IMMERSIVE_LIGHTS=on` — every fixture/switch comes up energised.
 //! - `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` at the wall switch once,
 //!   ~2.5 s in (the switch is only reachable by a hand-built crate stack).
 //! - `IMMERSIVE_AUDIO=log` — echo every `PlaySfx` request (clip, volume, pitch).
+//! - `IMMERSIVE_PROPS=grab` — spawn a test `item_pickup` ahead and hold real
+//!   RMB, so the `Start<Grab>` → `pickup::collect_on_grab` path is under test.
+//! - `IMMERSIVE_PROPS=rmbdoor` — unlock the door and hold real RMB, so the
+//!   binding → `Fire<Interact>` → `door::toggle_swing_on_interact` path is under
+//!   test (Phase 20 — RMB is an interact button).
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
@@ -40,7 +47,7 @@ use bevy_game_bits::inventory::{AddItem, InventoryItem};
 
 use crate::breakable::Breakable;
 use crate::carry::{Carried, Carrying, ThrowCharge};
-use crate::classes::{ItemPickup, PropCrate, PropWoodCrate};
+use crate::classes::{Interactable, ItemPickup, PropCrate, PropWoodCrate};
 use crate::config::{self, AutopilotStep};
 use crate::door::DoorSwing;
 use crate::interact::{Interacted, InteractionFocus};
@@ -97,9 +104,18 @@ pub fn auto_toggle_switch(
 /// prompt to read "Locked" and the door not to move. There is only one door
 /// now (the locked one), so `=door` and `=locked` behave the same. `=pick`
 /// (Phase 16) warps to the door, hands the player an active lockpick, holds the
-/// real `MouseButton::Left` (`press_use_key`) to pick the lock, fires
+/// real `MouseButton::Left` (`press_devtool_button`) to pick the lock, fires
 /// `Interacted` to open it, then walks into the corridor for a lighting shot —
-/// telemetry `doors(... locked=1)` → `locked=0` → `open=1/1`.
+/// telemetry `doors(... locked=1)` → `locked=0` → `open=1/1`. `=grab` (Phase 18)
+/// spawns one `item_pickup` a crosshair-length ahead of the player at frame 30
+/// and holds the real `MouseButton::Right` (`press_devtool_button`, frames
+/// 60–70) — expect the `pickup: collected` log line, telemetry `pickups 1 → 0`
+/// and `pack(items 0 → 1)`, `carrying=false` throughout. `=rmbdoor` (Phase 20)
+/// warps to the door, clears its lock at frame 140, then holds the real
+/// `MouseButton::Right` (`press_devtool_button`, frames 150–160) — the RMB
+/// press goes through the real binding to `Fire<Interact>` →
+/// `door::toggle_swing_on_interact`, proving RMB is an interact button.
+/// Telemetry: `doors(locked 1 → 0)` then `open 0/1 → 1/1`.
 pub fn props_mode() -> Option<String> {
     std::env::var("IMMERSIVE_PROPS").ok()
 }
@@ -108,6 +124,10 @@ pub fn props_mode() -> Option<String> {
 pub fn exercise_props(
     mode: Res<PropsMode>,
     doors: Query<Entity, With<DoorSwing>>,
+    // Data access, disjoint from `doors` above (`With<>` is an archetype
+    // filter, not access): `rmbdoor` clears `locked` here so the RMB press
+    // that follows actually opens the door.
+    mut swings: Query<&mut DoorSwing>,
     mut breakables: Query<&mut Breakable>,
     // `CharacterLook` is `#[require]`d onto the *player* (the relationship
     // target of `CharacterControllerCamera`), not the camera entity.
@@ -118,7 +138,10 @@ pub fn exercise_props(
     // `copy_character_look_to_camera` applies it (an unordered-system race).
     mut camera: Query<
         &mut Transform,
-        (With<CharacterControllerCameraOf>, Without<CharacterController>),
+        (
+            With<CharacterControllerCameraOf>,
+            Without<CharacterController>,
+        ),
     >,
     pack: Option<Res<PlayerPack>>,
     mut add_item: MessageWriter<AddItem>,
@@ -127,7 +150,7 @@ pub fn exercise_props(
     mut frame: Local<u32>,
 ) {
     *frame += 1;
-    let at_door = matches!(mode.0.as_str(), "door" | "locked" | "pick");
+    let at_door = matches!(mode.0.as_str(), "door" | "locked" | "pick" | "rmbdoor");
 
     // Warp + hold the view down the east extension so the screenshots actually
     // frame what this devtool exercises. Bevy: the east-wall doorway is at
@@ -162,7 +185,7 @@ pub fn exercise_props(
     // `pick` (Phase 16): add a lockpick to the pack (it auto-fills quickbar
     // slot 0), then press the real `Digit1` to make it active — so the whole
     // pickup → grid → quickbar → `Use` path is exercised, not just a resource
-    // poke. `press_use_key` (PreUpdate) then LMBs the lock, then E opens it.
+    // poke. `press_devtool_button` (PreUpdate) then LMBs the lock, then E opens it.
     if mode.0 == "pick" {
         if *frame == 95 {
             if let (Some(pack), Some(def)) = (&pack, crate::items::lookup("lockpick")) {
@@ -183,6 +206,19 @@ pub fn exercise_props(
         }
     }
 
+    // `rmbdoor` (Phase 20): the map's one door is locked, so clear the lock at
+    // frame 140 and let the *real RMB press* (`press_devtool_button`, frames
+    // 150–160 → binding → `Fire<Interact>` → `Interacted`) open it. No
+    // `commands.trigger` here — the binding is exactly what's under test.
+    if mode.0 == "rmbdoor" && *frame == 140 {
+        for mut swing in &mut swings {
+            if swing.locked {
+                swing.locked = false;
+                info!("devtools: cleared the door lock (rmbdoor)");
+            }
+        }
+    }
+
     match (mode.0.as_str(), *frame) {
         ("door", 150) | ("door", 420) | ("locked", 150) | ("pick", 210) => {
             for door in &doors {
@@ -196,21 +232,51 @@ pub fn exercise_props(
                 breakable.health = -1.0;
             }
         }
+        ("grab", 30) => {
+            // Spawn one pickup a crosshair-length ahead of the eye. `Interactable`
+            // is explicit — the class bases are only wired by the map loader, and
+            // both `spawn_visuals` (prompt) and `interact::resolve_interactable`
+            // (focus) need it present. `press_devtool_button` RMBs it at frame 60.
+            if let Ok(cam) = camera.single() {
+                let at = cam.translation + cam.forward() * 1.3;
+                commands.spawn((
+                    ItemPickup {
+                        item: "crowbar".into(),
+                    },
+                    Interactable::default(),
+                    Transform::from_translation(at),
+                ));
+                info!("devtools: spawned a test pickup at {at:?}");
+            }
+        }
         _ => {}
     }
 }
 
-/// `IMMERSIVE_PROPS=pick`: hold the real `MouseButton::Left` for a window
-/// (frames 130–150) so the whole `Use` binding → `Press` → `Fire<Use>` →
-/// `use_item::fire_use` path is under test — the same "press the real key, not
-/// the action" principle as `autopilot_drive`. `PreUpdate`, between
+/// Holds a real mouse button for a window so the whole binding → condition →
+/// `Fire`/`Start` path is under test — the "press the real key, not the action"
+/// principle from `autopilot_drive`. `PreUpdate`, between
 /// `bevy::input::InputSystems` and `EnhancedInputSystems::Update`.
-pub fn press_use_key(mut mouse: ResMut<ButtonInput<MouseButton>>, mut frame: Local<u32>) {
+///
+/// - `IMMERSIVE_PROPS=pick`: LMB frames 130–150 → `Use` → `use_item::fire_use`.
+/// - `IMMERSIVE_PROPS=grab`: RMB frames 60–70 → `Start<Grab>` → `pickup::collect_on_grab`.
+/// - `IMMERSIVE_PROPS=rmbdoor`: RMB frames 150–160 → `Fire<Interact>` →
+///   `door::toggle_swing_on_interact` (Phase 20 — RMB is an interact button).
+pub fn press_devtool_button(
+    mode: Res<PropsMode>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut frame: Local<u32>,
+) {
     *frame += 1;
-    if (130..150).contains(&*frame) {
-        mouse.press(MouseButton::Left);
+    let (button, window) = match mode.0.as_str() {
+        "grab" => (MouseButton::Right, 60..70),
+        "rmbdoor" => (MouseButton::Right, 150..160),
+        _ => (MouseButton::Left, 130..150),
+    };
+    if window.contains(&*frame) {
+        mouse.press(button);
     } else {
-        mouse.release(MouseButton::Left);
+        mouse.release(button);
     }
 }
 
@@ -248,10 +314,17 @@ pub fn exercise_inventory(
     mut player: Query<(&mut Transform, &mut CharacterLook), With<CharacterController>>,
     mut camera: Query<
         &mut Transform,
-        (With<CharacterControllerCameraOf>, Without<CharacterController>),
+        (
+            With<CharacterControllerCameraOf>,
+            Without<CharacterController>,
+        ),
     >,
     boards: Query<(&InventoryConfig, &Quickbar, &QuickbarParts)>,
-    items: Query<(Entity, &InventoryItem, &bevy_game_bits::inventory::InventorySlot)>,
+    items: Query<(
+        Entity,
+        &InventoryItem,
+        &bevy_game_bits::inventory::InventorySlot,
+    )>,
     mut rels: Query<&mut RelativeCursorPosition>,
     mut frame: Local<u32>,
 ) {
@@ -364,9 +437,15 @@ pub fn exercise_inventory(
 /// regression walk (`config::AUTOPILOT_SCRIPT`), `=crates` the crate
 /// grab/place/throw/weight-gate walk (`config::AUTOPILOT_SCRIPT_CRATES`),
 /// `=walk` a plain back-and-forth on the open floor (`config::AUTOPILOT_SCRIPT_WALK`,
-/// for the footstep cadence).
+/// for the footstep cadence), `=rmb` the *same* ladder walk as `=1` but tapping
+/// RMB instead of E on `interact` legs (`interact_rmb`) — the Phase 20 A/B that
+/// proves RMB is now an interact button. Same script, same expected telemetry.
 #[derive(Resource, Clone, Copy)]
-pub struct AutopilotScript(pub &'static [AutopilotStep]);
+pub struct AutopilotScript {
+    pub steps: &'static [AutopilotStep],
+    /// Tap `MouseButton::Right` rather than `KeyCode::KeyE` on `interact` legs.
+    pub interact_rmb: bool,
+}
 
 /// The absolute view orientation (radians) the current leg wants. Written by
 /// `autopilot_drive` in `PreUpdate`, applied to the camera by `autopilot_look`
@@ -385,9 +464,22 @@ pub struct AutopilotAim {
 
 pub fn autopilot_script() -> Option<AutopilotScript> {
     match std::env::var("IMMERSIVE_AUTOPILOT").ok().as_deref() {
-        Some("1") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT)),
-        Some("crates") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT_CRATES)),
-        Some("walk") => Some(AutopilotScript(config::AUTOPILOT_SCRIPT_WALK)),
+        Some("1") => Some(AutopilotScript {
+            steps: config::AUTOPILOT_SCRIPT,
+            interact_rmb: false,
+        }),
+        Some("crates") => Some(AutopilotScript {
+            steps: config::AUTOPILOT_SCRIPT_CRATES,
+            interact_rmb: false,
+        }),
+        Some("walk") => Some(AutopilotScript {
+            steps: config::AUTOPILOT_SCRIPT_WALK,
+            interact_rmb: false,
+        }),
+        Some("rmb") => Some(AutopilotScript {
+            steps: config::AUTOPILOT_SCRIPT,
+            interact_rmb: true,
+        }),
         _ => None,
     }
 }
@@ -404,10 +496,10 @@ pub struct Tap {
 }
 
 impl Tap {
-    fn drive(
+    fn drive<T: Copy + Eq + std::hash::Hash + Send + Sync + 'static>(
         &mut self,
-        keys: &mut ButtonInput<KeyCode>,
-        key: KeyCode,
+        keys: &mut ButtonInput<T>,
+        key: T,
         step: usize,
         start: bool,
         dt: f32,
@@ -432,12 +524,14 @@ impl Tap {
 /// Drives the player through the selected `AutopilotScript` on a loop: writes
 /// `AccumulatedInput.last_movement` (same field ahoy's own WASD observer
 /// writes), hands the view orientation to `autopilot_look` via `AutopilotAim`,
-/// taps the real `KeyCode::KeyE` on `interact` legs, and *holds* the real
-/// `KeyCode::Space` / `MouseButton::Right` for the whole of any `jump` / `grab`
-/// leg (so a run of such legs is one continuous hold — Space pressed well
-/// before a ladder grab, RMB held to charge a throw). Runs in `PreUpdate`,
-/// after `bevy::input::InputSystems` and before `EnhancedInputSystems::Update`,
-/// so the key/mouse writes are seen by bevy_enhanced_input the same frame.
+/// taps the real interact button on `interact` legs (`KeyCode::KeyE`, or
+/// `MouseButton::Right` when the script's `interact_rmb` is set — `=rmb`), and
+/// *holds* the real
+/// `KeyCode::Space` / `MouseButton::Right` / `MouseButton::Left` for the whole
+/// of any `jump` / `grab` / `throw` leg (so a run of such legs is one
+/// continuous hold — Space before a ladder grab, LMB held to charge a throw).
+/// Runs in `PreUpdate`, after `bevy::input::InputSystems` and before
+/// `EnhancedInputSystems::Update`, so the writes are seen the same frame.
 pub fn autopilot_drive(
     script: Res<AutopilotScript>,
     mut inputs: Query<&mut AccumulatedInput, With<CharacterController>>,
@@ -450,7 +544,7 @@ pub fn autopilot_drive(
     mut step_elapsed: Local<f32>,
     mut use_tap: Local<Tap>,
 ) {
-    let steps = script.0;
+    let steps = script.steps;
     if steps.is_empty() || inputs.is_empty() {
         // Don't start (or advance) the script until the player exists — the
         // scene loads asynchronously, and letting the clock run during the load
@@ -477,6 +571,7 @@ pub fn autopilot_drive(
         interact,
         jump,
         grab,
+        throw,
         pitch_deg,
         ..
     } = *step;
@@ -503,40 +598,52 @@ pub fn autopilot_drive(
     aim.pitch = pitch_deg.to_radians();
 
     // Press the real keys, not the actions: this puts the whole binding →
-    // `Press` → `fire_interact` (E) and binding → ahoy `Jump` / `Start<Jump>`
-    // (Space) paths under test. Drop `Press` from `Interact` and the E hold
-    // toggles the ladder every frame; write `AccumulatedInput.jumped` directly
-    // instead of via Space and you'd miss that the ladder must key off the
-    // press *edge*, not the buffer.
+    // `Press` → `fire_interact` (RMB/E) and binding → ahoy `Jump` /
+    // `Start<Jump>` (Space) paths under test. Drop `Press` from `Interact` and
+    // the interact hold toggles the ladder every frame; write
+    // `AccumulatedInput.jumped` directly instead of via Space and you'd miss
+    // that the ladder must key off the press *edge*, not the buffer.
     //
-    // E is a tap fired the frame the raycast focuses something (so the grab
-    // lands the instant the ladder is in range). Space is *held* for the whole
-    // of a `jump` leg — so a run of `jump` legs ending on the grab leg means
-    // Space went down seconds before the grab and is still down as it lands:
-    // the "run at the ladder, jump, then press E" gesture, and the case
-    // `let_go_on_jump` must NOT treat as a request to let go (the press
-    // predates the climb, so it raises no new edge while climbing).
-    use_tap.drive(
-        &mut keys,
-        KeyCode::KeyE,
-        *step_idx,
-        interact && focus.0.is_some(),
-        dt,
-    );
+    // The interact button is a tap fired the frame the raycast focuses
+    // something (so the grab lands the instant the ladder is in range). Space
+    // is *held* for the whole of a `jump` leg — so a run of `jump` legs ending
+    // on the grab leg means Space went down seconds before the grab and is
+    // still down as it lands: the "run at the ladder, jump, then press
+    // interact" gesture, and the case `let_go_on_jump` must NOT treat as a
+    // request to let go (the press predates the climb, so it raises no new edge
+    // while climbing).
     if jump {
         keys.press(KeyCode::Space);
     } else {
         keys.release(KeyCode::Space);
     }
 
-    // RMB is *held* for the whole of a `grab` leg, like Space — so a leg's
-    // duration is the throw charge, and a run of `grab` legs is one continuous
-    // press (grab, then keep holding to charge). Exercises the real
-    // binding → `Start<Grab>` / `Complete<Grab>` path in `carry.rs`.
+    // RMB held for a `grab` leg (`Start<Grab>` → `carry::start_grab` /
+    // `pickup::collect_on_grab`); LMB held for a `throw` leg (`Start<Throw>` /
+    // `Complete<Throw>` → `carry::start_throw` / `release_prop`, the charge in
+    // between). Same "hold the real button for the leg" shape as Space/`jump`.
+    // These run *before* the interact tap below so that in `=rmb` mode the
+    // tap's RMB press is the frame's last word on the button — `AUTOPILOT_SCRIPT`
+    // sets `grab: false` on every leg, so this only ever releases here.
     if grab {
         mouse.press(MouseButton::Right);
     } else {
         mouse.release(MouseButton::Right);
+    }
+    if throw {
+        mouse.press(MouseButton::Left);
+    } else {
+        mouse.release(MouseButton::Left);
+    }
+
+    // The interact tap: RMB in `=rmb` mode (the Phase 20 A/B), else E. One
+    // `Tap` helper, driven generically over the button type. Fired the frame
+    // `InteractionFocus` first resolves the ladder.
+    let armed = interact && focus.0.is_some();
+    if script.interact_rmb {
+        use_tap.drive(&mut mouse, MouseButton::Right, *step_idx, armed, dt);
+    } else {
+        use_tap.drive(&mut keys, KeyCode::KeyE, *step_idx, armed, dt);
     }
 }
 
@@ -753,7 +860,9 @@ pub fn take_screenshot(
         done.pack_open = true;
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk("screenshots/010-immersive/260910-pack-open.png"));
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260910-pack-open.png",
+            ));
     }
     // `IMMERSIVE_INVENTORY=drag`: after the synthetic drag onto slot 4 lands.
     if !done.quickbar_drag && *frame == 175 && windows.iter().any(|w| w.open) {
@@ -770,15 +879,17 @@ pub fn take_screenshot(
         done.viewmodel = true;
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk("screenshots/010-immersive/260910-viewmodel.png"));
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260910-viewmodel.png",
+            ));
     }
     let Ok((transform, state, climbing, carrying)) = player.single() else {
         return;
     };
     // In front of the east-wall corridor door (the `IMMERSIVE_PROPS` warp
     // parks the player here) — the shot for the door's fit in its frame.
-    let at_corridor_door = transform.translation.x.abs() < 2.0
-        && (-15.5..-12.0).contains(&transform.translation.z);
+    let at_corridor_door =
+        transform.translation.x.abs() < 2.0 && (-15.5..-12.0).contains(&transform.translation.z);
     if !done.door && *frame > 140 && at_corridor_door {
         done.door = true;
         commands
@@ -808,7 +919,9 @@ pub fn take_screenshot(
         done.corridor = true;
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk("screenshots/010-immersive/260910-corridor.png"));
+            .observe(save_to_disk(
+                "screenshots/010-immersive/260910-corridor.png",
+            ));
     }
     // `IMMERSIVE_PROPS=pick`: warped into the bay (z ≈ -40) facing the large
     // yard opening — both new junctions (corridor→bay, bay→yard) in one frame.

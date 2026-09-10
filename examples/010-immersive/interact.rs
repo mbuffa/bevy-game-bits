@@ -1,6 +1,7 @@
-//! The "use" raycast: what the player is looking at, and the event fired
-//! when they press E on it. Mirrors the `SpatialQuery::cast_ray` pattern
-//! already used in `examples/009-derby/vehicle.rs:405-530`.
+//! The "use" raycast: what the player is looking at, and the `Interacted`
+//! event fired when they press the interact button (RMB or E) on it. Mirrors
+//! the `SpatialQuery::cast_ray` pattern already used in
+//! `examples/009-derby/vehicle.rs:405-530`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -14,7 +15,7 @@ use crate::{config, input};
 #[derive(Resource, Default)]
 pub struct InteractionFocus(pub Option<(Entity, String)>);
 
-/// Fired at the focused entity when the player presses `Interact`.
+/// Fired at the focused entity when the player presses `Interact` (RMB or E).
 #[derive(EntityEvent, Debug, Clone)]
 pub struct Interacted {
     #[event_target]
