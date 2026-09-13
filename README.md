@@ -26,9 +26,16 @@ can be dropped into another project:
   `012-vehicle` is the minimal example of using it.
 - `bevy_game_bits::inventory` — a tetris-style grid inventory: configurable
   board size, click-to-select with a description panel, hold-to-drag/
-  release-to-drop with a live placement preview, and a show/hide window
-  state a host flips with `NextState`. Item data and sounds are entirely
-  host-supplied. Extracted from `008-inventory`, now its minimal example.
+  release-to-drop with a live placement preview, drag or double-click to move
+  items between boards, and a per-board open/closed flag the host flips.
+  Item data and sounds are entirely host-supplied. Extracted from
+  `008-inventory`, now its minimal example.
+- `bevy_game_bits::world_map` — a Fallout 1/2-style overworld: a scrollable
+  tile grid loaded from JSON, a token you click to send travelling, terrain
+  that slows it down (no pathfinding — you pick the route), locations with an
+  "enter" widget, a sidebar of known places, and an optional travel-time
+  clock. The map renders in its own dedicated screen region beside the
+  sidebar rather than underneath it. `009-world-map` is its minimal example.
 
 ## Track
 
