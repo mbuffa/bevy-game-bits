@@ -195,7 +195,11 @@ impl Default for WorldMapTheme {
             z_party: 3.5,
             z_traveler: 4.0,
             z_interact_widget: 5.0,
-            aside_background: Color::srgba(0.10, 0.11, 0.14, 0.96),
+            // Fully opaque: the aside now stands in front of a real gap in the
+            // map camera's viewport (see `map_viewport`) that nothing else
+            // clears, so any translucency here would show stale pixels
+            // instead of a see-through map.
+            aside_background: Color::srgba(0.10, 0.11, 0.14, 1.0),
             aside_heading_color: Color::srgb(0.92, 0.89, 0.84),
             aside_heading_font_size: 18.0,
             aside_row_background: Color::srgba(1.0, 1.0, 1.0, 0.06),
@@ -252,26 +256,54 @@ pub struct WorldMapSpec {
     pub layout: WorldMapLayout,
 }
 
-/// The slice of the viewport the map is actually visible through, as an offset
-/// rect around the camera position (world units, `+Y` up): a camera at `C`
-/// sees the map through `C + visible_rect(..)`. The aside is opaque and
-/// full-height, so it trims one side of `X` and leaves `Y` alone.
+/// The map camera's own viewport, in *world units, `+Y` up*, as an offset rect
+/// around the camera position: a camera at `C` sees the map through
+/// `C + visible_rect(..)`. The map camera's [`Camera::viewport`] (see
+/// [`map_viewport`]) is set to exactly this region — the map is drawn through
+/// a real viewport that stops where the aside starts, not a translucent panel
+/// laid on top of a full-window map — so the *camera's own centre* is this
+/// rect's centre and the result is always symmetric around zero, regardless
+/// of [`AsideSide`]. `AsideSide` only decides *where in the window* that
+/// viewport sits (see [`map_viewport`]); it no longer shapes this rect.
 ///
 /// This is what the pan/follow clamp has to reason about — clamping against
-/// the raw window would let the map's far edge slide permanently under the
-/// panel.
+/// the raw window would let the map's far edge slide past the camera's own
+/// edge.
 pub fn visible_rect(viewport: Vec2, layout: &WorldMapLayout) -> Rect {
-    let half = viewport / 2.0;
-    match layout.aside_side {
-        AsideSide::Right => Rect {
-            min: Vec2::new(-half.x, -half.y),
-            max: Vec2::new(half.x - layout.aside_width_px, half.y),
-        },
-        AsideSide::Left => Rect {
-            min: Vec2::new(-half.x + layout.aside_width_px, -half.y),
-            max: Vec2::new(half.x, half.y),
-        },
+    let size = Vec2::new((viewport.x - layout.aside_width_px).max(0.0), viewport.y);
+    let half = size / 2.0;
+    Rect {
+        min: -half,
+        max: half,
     }
+}
+
+/// The map camera's [`Camera::viewport`] value — `(physical_position,
+/// physical_size)` — for a window of `physical_size` at `scale_factor`, given
+/// where the aside sits. The **one** place the pixel split between the map
+/// region and the aside strip is decided; [`ui::sync_map_viewport`](super::ui::sync_map_viewport)
+/// writes it onto the camera, and `spawn_world_map` sizes the aside's own
+/// `Node` to the same `aside_width_px` — so the two edges can never disagree
+/// by a rounding pixel.
+///
+/// Returns `None` when there's no room left for the map (the aside is as wide
+/// as the window, or the window has zero height) — the caller should leave the
+/// camera's viewport untouched rather than write a degenerate one.
+pub fn map_viewport(
+    physical_size: UVec2,
+    scale_factor: f32,
+    layout: &WorldMapLayout,
+) -> Option<(UVec2, UVec2)> {
+    let aside_px = (layout.aside_width_px * scale_factor).round() as u32;
+    if physical_size.y == 0 || aside_px >= physical_size.x {
+        return None;
+    }
+    let map_width = physical_size.x - aside_px;
+    let position = match layout.aside_side {
+        AsideSide::Right => UVec2::ZERO,
+        AsideSide::Left => UVec2::new(aside_px, 0),
+    };
+    Some((position, UVec2::new(map_width, physical_size.y)))
 }
 
 /// Clamp a wanted camera centre (world units) so the map covers the visible
@@ -311,16 +343,19 @@ mod tests {
     }
 
     #[test]
-    fn visible_rect_trims_the_aside_side() {
+    fn visible_rect_is_centred_and_the_same_for_either_side() {
+        // The map now renders through its own viewport (see `map_viewport`),
+        // so the region the camera can see is always centred on its own
+        // centre — which side the aside sits on no longer skews it.
         let win = Vec2::new(1000.0, 600.0);
+        let half = Vec2::new(400.0, 300.0); // (1000 - 200) / 2, 600 / 2
 
         let r = visible_rect(win, &layout(AsideSide::Right));
-        assert_eq!(r.min, Vec2::new(-500.0, -300.0));
-        assert_eq!(r.max, Vec2::new(300.0, 300.0)); // 500 - 200
+        assert_eq!(r.min, -half);
+        assert_eq!(r.max, half);
 
         let l = visible_rect(win, &layout(AsideSide::Left));
-        assert_eq!(l.min, Vec2::new(-300.0, -300.0)); // -500 + 200
-        assert_eq!(l.max, Vec2::new(500.0, 300.0));
+        assert_eq!(l, r);
     }
 
     #[test]
@@ -330,13 +365,13 @@ mod tests {
         let map = Vec2::new(4000.0, 4000.0);
 
         // Pushed hard left: the map's left edge (-2000) can't come past the
-        // visible region's left edge (camera + -500).
+        // visible region's left edge (camera + -400).
         let clamped = clamp_camera_center(map, visible, Vec2::new(-9999.0, 0.0));
-        assert_eq!(clamped.x, -2000.0 - (-500.0)); // = -1500
+        assert_eq!(clamped.x, -2000.0 - (-400.0)); // = -1600
         assert_eq!(clamped.x + visible.min.x, -2000.0);
 
         // Pushed hard right: the map's right edge (2000) can't come past the
-        // visible region's right edge (camera + 300).
+        // visible region's right edge (camera + 400).
         let clamped = clamp_camera_center(map, visible, Vec2::new(9999.0, 0.0));
         assert_eq!(clamped.x + visible.max.x, 2000.0);
     }
@@ -377,8 +412,38 @@ mod tests {
         let map = Vec2::new(200.0, 200.0);
 
         let clamped = clamp_camera_center(map, visible, Vec2::new(1234.0, 56.0));
-        // Visible region X spans [-500, 300], centre -100 -> camera at +100 so
-        // the map centre lands there. Y is untrimmed, so camera stays at 0.
-        assert_eq!(clamped, Vec2::new(100.0, 0.0));
+        // The visible region is always centred on the camera's own centre now
+        // (see `visible_rect_is_centred_and_the_same_for_either_side`), so a
+        // map smaller than it centres at zero regardless of the wanted pan.
+        assert_eq!(clamped, Vec2::ZERO);
+    }
+
+    #[test]
+    fn map_viewport_puts_the_gap_on_the_named_side() {
+        let win = UVec2::new(1600, 900);
+        let (pos, size) = map_viewport(win, 1.0, &layout(AsideSide::Right)).unwrap();
+        assert_eq!(pos, UVec2::ZERO);
+        assert_eq!(size, UVec2::new(1400, 900)); // 1600 - 200
+
+        let (pos, size) = map_viewport(win, 1.0, &layout(AsideSide::Left)).unwrap();
+        assert_eq!(pos, UVec2::new(200, 0));
+        assert_eq!(size, UVec2::new(1400, 900));
+    }
+
+    #[test]
+    fn map_viewport_scales_the_aside_width_by_the_scale_factor() {
+        let win = UVec2::new(3200, 1800); // 1600x900 logical @ 2x
+        let (pos, size) = map_viewport(win, 2.0, &layout(AsideSide::Right)).unwrap();
+        assert_eq!(pos, UVec2::ZERO);
+        assert_eq!(size, UVec2::new(2800, 1800)); // 3200 - 200*2
+    }
+
+    #[test]
+    fn map_viewport_is_none_when_there_is_no_room_left() {
+        // Aside at least as wide as the window.
+        assert!(map_viewport(UVec2::new(150, 900), 1.0, &layout(AsideSide::Right)).is_none());
+        assert!(map_viewport(UVec2::new(200, 900), 1.0, &layout(AsideSide::Right)).is_none());
+        // Zero-height window.
+        assert!(map_viewport(UVec2::new(1600, 0), 1.0, &layout(AsideSide::Right)).is_none());
     }
 }

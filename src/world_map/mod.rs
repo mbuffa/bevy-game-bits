@@ -21,7 +21,15 @@
 //!
 //! The camera is the host's to spawn, and it **must** carry [`WorldMapCamera`]
 //! — an unmarked second camera would silently break the `Single<&Camera>` the
-//! cursor and pan systems rely on.
+//! cursor and pan systems rely on. It also **must stay at [`Camera::order`]
+//! `0`** (Bevy's default): the map renders through a real
+//! [`Camera::viewport`] cut to the region beside the aside (see
+//! [`map_viewport`]), and the library spawns its *own* second camera — order
+//! `1`, [`ClearColorConfig::None`] — to host the aside and interact-menu
+//! `bevy_ui` roots full-window over top of it. Nothing clears the strip
+//! outside the map viewport, so [`WorldMapTheme::aside_background`] is opaque
+//! by default; a host that makes it translucent will see stale pixels there,
+//! not a see-through map.
 //!
 //! Point [`WorldMapPlugin::map`] at your own spec to change the file, the
 //! skin, or the layout, or spawn maps yourself with [`spawn_world_map`] after
@@ -117,8 +125,8 @@ use bevy::prelude::*;
 
 pub use asset::{WorldMapAsset, WorldMapLoadError, WorldMapLoader, WorldMapSource};
 pub use config::{
-    clamp_camera_center, visible_rect, AsideSide, WorldMapConfig, WorldMapLayout, WorldMapSpec,
-    WorldMapTheme,
+    clamp_camera_center, map_viewport, visible_rect, AsideSide, WorldMapConfig, WorldMapLayout,
+    WorldMapSpec, WorldMapTheme,
 };
 pub use data::{
     cell_of, tile_to_world, world_to_tile, LocationData, Terrain, TerrainData, WorldMapData,
@@ -134,13 +142,13 @@ pub use travel::{
     WorldMapCamera, WorldMapCursor, WorldMapTime,
 };
 pub use ui::{
-    build_map_visuals, build_party_visuals, follow_and_clamp_camera, pan_camera,
+    build_map_visuals, build_party_visuals, ensure_ui_camera, follow_and_clamp_camera, pan_camera,
     pick_interact_menu_row, refollow_on_new_target, resolve_map, snap_camera_to_traveler,
     spawn_world_map, sync_aside, sync_clock_label, sync_coords_label, sync_interact_menu,
-    sync_interact_widgets, sync_location_visibility, sync_party_visibility, sync_status_text,
-    sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow, CameraSnapped,
-    InteractMenuRow, InteractWidget, TargetMarker, WorldMapParts, WorldMapRoot, WorldMapTile,
-    WorldMapView,
+    sync_interact_widgets, sync_location_visibility, sync_map_viewport, sync_party_visibility,
+    sync_status_text, sync_target_marker, sync_traveler_transform, travel_to_aside_row, AsideRow,
+    CameraSnapped, InteractMenuRow, InteractWidget, TargetMarker, WorldMapParts, WorldMapRoot,
+    WorldMapTile, WorldMapView,
 };
 
 /// Everything you need to build and drive a world map, in one import.
@@ -301,6 +309,8 @@ impl Plugin for WorldMapPlugin {
                 (
                     ui::build_map_visuals.after(ui::resolve_map),
                     ui::build_party_visuals,
+                    ui::ensure_ui_camera,
+                    ui::sync_map_viewport,
                 )
                     .in_set(WorldMapSet::Build),
             );

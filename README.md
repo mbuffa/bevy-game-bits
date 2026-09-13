@@ -34,7 +34,8 @@ can be dropped into another project:
   tile grid loaded from JSON, a token you click to send travelling, terrain
   that slows it down (no pathfinding — you pick the route), locations with an
   "enter" widget, a sidebar of known places, and an optional travel-time
-  clock. `009-world-map` is its minimal example.
+  clock. The map renders in its own dedicated screen region beside the
+  sidebar rather than underneath it. `009-world-map` is its minimal example.
 
 ## Track
 

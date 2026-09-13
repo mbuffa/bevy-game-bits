@@ -9,11 +9,14 @@
 //! tokens and rows appear a frame or two later once [`resolve_map`] has the
 //! map data.
 
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::Viewport;
 use bevy::prelude::*;
 
 use crate::world_map::asset::{WorldMapAsset, WorldMapSource};
 use crate::world_map::config::{
-    clamp_camera_center, visible_rect, WorldMapConfig, WorldMapLayout, WorldMapSpec, WorldMapTheme,
+    clamp_camera_center, map_viewport, visible_rect, WorldMapConfig, WorldMapLayout, WorldMapSpec,
+    WorldMapTheme,
 };
 use crate::world_map::data::{tile_to_world, WorldMapData, WorldMapGrid};
 use crate::world_map::time::WorldMapClock;
@@ -70,6 +73,11 @@ pub struct WorldMapParts {
     /// The absolutely-positioned "interact" menu popup. `Display::None` while
     /// closed; [`InteractMenuRow`]s hang off it.
     pub interact_menu: Entity,
+    /// The full-window `Camera2d` [`ensure_ui_camera`] spawns to host
+    /// `aside_root`/`interact_menu` over the map camera's trimmed viewport.
+    /// `None` until then — a render concern, so it's never created on the
+    /// headless (`visuals: false`) path.
+    pub ui_camera: Option<Entity>,
 }
 
 /// One terrain tile quad. `ChildOf` the map.
@@ -255,6 +263,7 @@ pub fn spawn_world_map(commands: &mut Commands, spec: WorldMapSpec) -> Entity {
                 clock_label,
                 coords_label,
                 interact_menu,
+                ui_camera: None,
             },
         ))
         .id()
@@ -1139,6 +1148,89 @@ pub fn pick_interact_menu_row(
     }
 }
 
+/// Spawns the full-window `Camera2d` each map needs to host its aside panel
+/// and interact menu over the map camera's trimmed viewport (see
+/// [`sync_map_viewport`]), and points both roots at it with [`UiTargetCamera`]
+/// — a host that spawns extra cameras of its own can't make the default-UI-
+/// camera lookup ambiguous this way. Runs once per map: `parts.ui_camera` is
+/// `None` until this fires and is never reset. Order `1`,
+/// [`ClearColorConfig::None`] so it layers its UI over the map camera's
+/// (order `0`) output rather than clearing it away.
+///
+/// **`RenderLayers::none()` is load-bearing, not decoration.** `RenderLayers`
+/// defaults to layer `0` for every camera *and* every entity that doesn't
+/// carry the component — including this crate's own world-space tiles and
+/// tokens — so without it this camera would *also* render the whole map, from
+/// its own default (world-origin) `Transform`, full-window, drawn after the
+/// map camera and so completely overwriting its correctly clamped output.
+/// `none()` rather than a specific sentinel layer: it can never collide with
+/// whatever layer a host later assigns its own content to, because it
+/// intersects with nothing. `bevy_ui` is unaffected either way — its
+/// extraction is driven by [`UiTargetCamera`], not `RenderLayers`.
+pub fn ensure_ui_camera(mut commands: Commands, mut maps: Query<&mut WorldMapParts>) {
+    for mut parts in &mut maps {
+        if parts.ui_camera.is_some() {
+            continue;
+        }
+        let camera = commands
+            .spawn((
+                Camera2d,
+                Camera {
+                    order: 1,
+                    clear_color: ClearColorConfig::None,
+                    ..default()
+                },
+                RenderLayers::none(),
+            ))
+            .id();
+        commands
+            .entity(parts.aside_root)
+            .insert(UiTargetCamera(camera));
+        commands
+            .entity(parts.interact_menu)
+            .insert(UiTargetCamera(camera));
+        parts.ui_camera = Some(camera);
+    }
+}
+
+/// Keeps the map camera's [`Camera::viewport`] in step with the window and
+/// each map's [`WorldMapLayout`] — [`map_viewport`] is the one place that
+/// split is computed, so the map camera's edge and the aside `Node`'s edge can
+/// never disagree by a rounding pixel. Change-guarded (only writes when the
+/// computed viewport actually differs) so it doesn't trip `Camera` change
+/// detection every frame. A missing [`Window`] or [`WorldMapCamera`] — as in a
+/// headless test — just makes the `Single`s fail and the system skip; the
+/// camera's viewport is then left at Bevy's own full-window default, which is
+/// exactly what a headless test wants.
+///
+/// Assumes one map on screen at a time, like the rest of the camera systems
+/// (see the module-level Limits note) — it takes the first map's layout.
+pub fn sync_map_viewport(
+    window: Single<&Window>,
+    mut camera: Single<&mut Camera, With<WorldMapCamera>>,
+    maps: Query<&WorldMapLayout>,
+) {
+    let Some(layout) = maps.iter().next() else {
+        return;
+    };
+    let Some((physical_position, physical_size)) =
+        map_viewport(window.physical_size(), window.scale_factor(), layout)
+    else {
+        return;
+    };
+    let changed = match &camera.viewport {
+        Some(v) => v.physical_position != physical_position || v.physical_size != physical_size,
+        None => true,
+    };
+    if changed {
+        camera.viewport = Some(Viewport {
+            physical_position,
+            physical_size,
+            ..default()
+        });
+    }
+}
+
 /// Frames the map on the player traveller the first frame its
 /// [`WorldMapGrid`] exists, then inserts [`CameraSnapped`] so it never runs
 /// for that map again. Without this, a map larger than the viewport opens on
@@ -1174,7 +1266,8 @@ pub fn snap_camera_to_traveler(
 }
 
 /// Eases the follow-cam toward the moving traveller, then clamps the camera so
-/// the map keeps covering the part of the view the aside doesn't hide.
+/// the map keeps covering the camera's own viewport (see [`sync_map_viewport`]),
+/// the part of the window [`map_viewport`] doesn't hand to the aside.
 pub fn follow_and_clamp_camera(
     time: Res<Time>,
     window: Single<&Window>,

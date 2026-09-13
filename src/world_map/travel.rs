@@ -377,15 +377,26 @@ pub fn in_interact_square(center: Vec2, half: f32, p: Vec2) -> bool {
 
 /// Refreshes every map's [`WorldMapCursor`] from the pointer and the
 /// [`WorldMapCamera`].
+///
+/// A pointer outside the camera's own [`Camera::logical_viewport_rect`] — over
+/// the aside strip, once [`ui::sync_map_viewport`](super::ui::sync_map_viewport)
+/// has trimmed it — reads as invalid rather than an extrapolated off-map tile.
+/// `logical_viewport_rect` is the full window when no viewport is set (the
+/// headless path), so this is a no-op there.
 pub fn track_cursor(
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform), With<WorldMapCamera>>,
     mut maps: Query<(&WorldMapGrid, &mut WorldMapCursor)>,
 ) {
     let (camera, cam_tf) = *camera;
-    let world = window
-        .cursor_position()
-        .and_then(|px| camera.viewport_to_world_2d(cam_tf, px).ok());
+    let world = window.cursor_position().and_then(|px| {
+        let in_viewport = camera
+            .logical_viewport_rect()
+            .is_none_or(|rect| rect.contains(px));
+        in_viewport
+            .then(|| camera.viewport_to_world_2d(cam_tf, px).ok())
+            .flatten()
+    });
     for (grid, mut cursor) in &mut maps {
         match world {
             Some(world) => {
