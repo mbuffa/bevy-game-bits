@@ -719,6 +719,7 @@
 "targetname" "main_lights"
 "start_on" "1"
 "cone_deg" "120"
+"shadows" "1"
 }
 {
 "classname" "light_fixture"
@@ -726,6 +727,7 @@
 "targetname" "main_lights"
 "start_on" "1"
 "cone_deg" "120"
+"shadows" "1"
 }
 {
 "classname" "light_fixture"
@@ -733,6 +735,7 @@
 "targetname" "main_lights"
 "start_on" "1"
 "cone_deg" "120"
+"shadows" "1"
 }
 {
 "classname" "light_fixture"

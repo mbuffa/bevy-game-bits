@@ -511,8 +511,14 @@ CEILING_LAMPS = [
 
 # One lamp hung on the rack uprights (~z 320) down each of the three aisles
 # between the four runs, so the racking doesn't throw black canyons.
+# `shadows=1`: each one is mounted right beside the pallet slabs it's meant to
+# light past, and without a shadow map its cone punched straight through them
+# onto the floor below as a sharp, geometrically nonsensical bright patch
+# (unlike the SE/office/night lamps, this was a visual quibble, not a
+# cross-room leak, so it wasn't in `_check_leaks()`'s bar for turning
+# shadows=1 on by default).
 AISLE_LAMPS = [
-    _lamp(cx, 264, 320, "main_lights", start_on=1, cone_deg=120)
+    _lamp(cx, 264, 320, "main_lights", start_on=1, cone_deg=120, shadows=1)
     for cx in (-314, -30, 260)
 ]
 
