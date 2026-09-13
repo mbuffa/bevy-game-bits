@@ -95,7 +95,12 @@ fn world_with_car(spec: VehicleSpec, height: f32) -> (App, Entity) {
         .id();
     for mount in spec.wheel_mounts {
         app.world_mut().spawn((
-            wheel_bundle(&spec, Transform::from_translation(mount), mount.z > 0.0, true),
+            wheel_bundle(
+                &spec,
+                Transform::from_translation(mount),
+                mount.z > 0.0,
+                true,
+            ),
             ChildOf(car),
         ));
     }
@@ -152,7 +157,11 @@ fn a_car_settles_onto_its_springs_at_the_derived_ride_height() {
         "settled at {height:.4} m, expected {expected:.4} m",
     );
     // Genuinely at rest, not still oscillating through the right value.
-    assert!(velocity(&app, car).length() < 0.05, "still moving: {:?}", velocity(&app, car));
+    assert!(
+        velocity(&app, car).length() < 0.05,
+        "still moving: {:?}",
+        velocity(&app, car)
+    );
 }
 
 /// A wheel with nothing under it must contribute nothing, so the chassis
@@ -188,7 +197,10 @@ fn full_throttle_converges_on_top_speed_without_exceeding_it() {
 
     step(&mut app, 4.0);
     let mid = velocity(&app, car).length();
-    assert!(mid > 8.0, "should be well underway after 4 s, got {mid:.1} m/s");
+    assert!(
+        mid > 8.0,
+        "should be well underway after 4 s, got {mid:.1} m/s"
+    );
 
     step(&mut app, 20.0);
     let terminal = velocity(&app, car).length();
@@ -211,14 +223,21 @@ fn positive_steer_turns_the_car_toward_positive_x() {
     step(&mut app, 3.0);
 
     let position = position(&app, car);
-    assert!(position.x > 0.5, "should have arced toward +X, at x = {:.2}", position.x);
+    assert!(
+        position.x > 0.5,
+        "should have arced toward +X, at x = {:.2}",
+        position.x
+    );
     let (yaw, ..) = app
         .world()
         .get::<Transform>(car)
         .unwrap()
         .rotation
         .to_euler(EulerRot::YXZ);
-    assert!(yaw < -0.1, "yaw should have turned toward +X, got {yaw:.3} rad");
+    assert!(
+        yaw < -0.1,
+        "yaw should have turned toward +X, got {yaw:.3} rad"
+    );
 }
 
 /// Braking has to actually haul the car down, not merely stop driving it —
@@ -237,7 +256,10 @@ fn braking_hauls_a_car_down_far_harder_than_coasting() {
         set_input(&mut app, car, 1.0, 0.0, false);
         step(&mut app, 5.0);
         let cruising = velocity(&app, car).z;
-        assert!(cruising > 5.0, "expected to be rolling forward, got {cruising:.2} m/s");
+        assert!(
+            cruising > 5.0,
+            "expected to be rolling forward, got {cruising:.2} m/s"
+        );
 
         set_input(&mut app, car, if brake { -1.0 } else { 0.0 }, 0.0, false);
         step(&mut app, 1.5);
@@ -247,7 +269,10 @@ fn braking_hauls_a_car_down_far_harder_than_coasting() {
     let (cruising, braked) = run(true);
     let (_, coasted) = run(false);
 
-    assert!(braked < coasted, "braking {braked:.2} should beat coasting {coasted:.2} m/s");
+    assert!(
+        braked < coasted,
+        "braking {braked:.2} should beat coasting {coasted:.2} m/s"
+    );
     assert!(
         braked < cruising * 0.25,
         "1.5 s of brakes should scrub most of {cruising:.2} m/s, left {braked:.2}",
@@ -255,7 +280,10 @@ fn braking_hauls_a_car_down_far_harder_than_coasting() {
     // Coasting is rolling resistance and drag only, so it must still be
     // clearly rolling forward — otherwise "braking beat coasting" proves
     // nothing.
-    assert!(coasted > cruising * 0.5, "coasting fell off too fast: {coasted:.2} m/s");
+    assert!(
+        coasted > cruising * 0.5,
+        "coasting fell off too fast: {coasted:.2} m/s"
+    );
 }
 
 /// The handbrake's job is to break rear grip. Held through a turn at speed,
@@ -281,8 +309,14 @@ fn the_handbrake_makes_the_rear_wheels_slip_more_than_the_front() {
             rear = rear.max(wheel.slip_speed);
         }
     }
-    assert!(rear > front, "rear slip {rear:.2} should exceed front {front:.2}");
-    assert!(rear > 1.5, "rear should be properly sliding, got {rear:.2} m/s");
+    assert!(
+        rear > front,
+        "rear slip {rear:.2} should exceed front {front:.2}"
+    );
+    assert!(
+        rear > 1.5,
+        "rear should be properly sliding, got {rear:.2} m/s"
+    );
 }
 
 /// A hard landing has to announce itself, and an ordinary settle must not —
@@ -293,7 +327,11 @@ fn a_hard_landing_emits_a_wheel_landing_but_a_gentle_settle_does_not() {
 
     let (mut app, _) = world_with_car(spec, spec.spawn_height);
     step(&mut app, 2.0);
-    let quiet = app.world().resource::<Messages<WheelLanding>>().iter_current_update_messages().count();
+    let quiet = app
+        .world()
+        .resource::<Messages<WheelLanding>>()
+        .iter_current_update_messages()
+        .count();
     assert_eq!(quiet, 0, "settling onto the grid should be silent");
 
     let (mut app, _) = world_with_car(spec, 6.0);
@@ -310,7 +348,8 @@ fn a_hard_landing_emits_a_wheel_landing_but_a_gentle_settle_does_not() {
     assert_eq!(hard.len(), 4, "all four wheels should report the touchdown");
     let tuning = VehicleTuning::default();
     assert!(
-        hard.iter().all(|speed| *speed >= tuning.landing_thump_min_speed),
+        hard.iter()
+            .all(|speed| *speed >= tuning.landing_thump_min_speed),
         "every reported landing must clear the threshold: {hard:?}",
     );
 }

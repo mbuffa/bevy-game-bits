@@ -66,7 +66,10 @@ fn main() {
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.09)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window { title: "Vehicle".into(), ..default() }),
+            primary_window: Some(Window {
+                title: "Vehicle".into(),
+                ..default()
+            }),
             ..default()
         }))
         .add_plugins(PhysicsPlugins::default())
@@ -130,7 +133,11 @@ fn setup_scene(
     }
 
     commands.spawn((
-        DirectionalLight { illuminance: 12_000.0, shadows_enabled: true, ..default() },
+        DirectionalLight {
+            illuminance: 12_000.0,
+            shadows_enabled: true,
+            ..default()
+        },
         Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
@@ -139,7 +146,10 @@ fn setup_scene(
         Transform::from_xyz(0.0, 6.0, -32.0).looking_at(SPAWN, Vec3::Y),
         // Ambient light is per-view in Bevy 0.18, so it rides on the camera
         // rather than being a global resource.
-        AmbientLight { brightness: 220.0, ..default() },
+        AmbientLight {
+            brightness: 220.0,
+            ..default()
+        },
     ));
 }
 
@@ -168,7 +178,11 @@ fn spawn_car(
             Name::new("Car"),
             // Rigid body, collider, mass properties, `Vehicle`, `DriveInput`,
             // `DrivePower`.
-            chassis_bundle(CAR, &tuning, VehicleGeometry::from_mounts(&CAR.wheel_mounts)),
+            chassis_bundle(
+                CAR,
+                &tuning,
+                VehicleGeometry::from_mounts(&CAR.wheel_mounts),
+            ),
             // What makes W/A/S/D reach this car's `DriveInput`. Drop it and
             // write `DriveInput` from an AI instead — the controller can't
             // tell the difference.
@@ -244,7 +258,10 @@ struct SpeedText;
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         Text::new("W/S drive  ·  A/D steer  ·  Space handbrake  ·  R respawn"),
-        TextFont { font_size: 14.0, ..default() },
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.6)),
         Node {
             position_type: PositionType::Absolute,
@@ -256,7 +273,10 @@ fn setup_hud(mut commands: Commands) {
     commands.spawn((
         SpeedText,
         Text::new("0 km/h"),
-        TextFont { font_size: 28.0, ..default() },
+        TextFont {
+            font_size: 28.0,
+            ..default()
+        },
         Node {
             position_type: PositionType::Absolute,
             top: px(12),

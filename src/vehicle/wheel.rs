@@ -120,7 +120,12 @@ pub struct WheelLanding {
 ///     MeshMaterial3d(rubber.clone()),
 /// ));
 /// ```
-pub fn wheel_bundle(spec: &VehicleSpec, rest: Transform, steering: bool, driven: bool) -> impl Bundle {
+pub fn wheel_bundle(
+    spec: &VehicleSpec,
+    rest: Transform,
+    steering: bool,
+    driven: bool,
+) -> impl Bundle {
     (Wheel::new(spec, rest, steering, driven), rest)
 }
 

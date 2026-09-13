@@ -89,10 +89,10 @@ pub use wheel::{update_wheel_visuals, wheel_bundle, Wheel, WheelLanding};
 pub mod prelude {
     pub use super::{
         ackermann_angle, chassis_bundle, detach_as_debris, drive_from_keyboard, side_index,
-        wheel_bundle, ChassisMotion, DebrisConfig, DriveInput, DrivePower, ImpactSide, ImpactTuning,
-        ImpactZone, KeyboardDriver, SkidMarkConfig, SkidMarkPlugin, SoftProp, Vehicle,
-        VehicleGeometry, VehicleImpact, VehicleImpactPlugin, VehiclePlugin, VehicleSet, VehicleSpec,
-        VehicleTuning, Wheel, WheelLanding,
+        wheel_bundle, ChassisMotion, DebrisConfig, DriveInput, DrivePower, ImpactSide,
+        ImpactTuning, ImpactZone, KeyboardDriver, SkidMarkConfig, SkidMarkPlugin, SoftProp,
+        Vehicle, VehicleGeometry, VehicleImpact, VehicleImpactPlugin, VehiclePlugin, VehicleSet,
+        VehicleSpec, VehicleTuning, Wheel, WheelLanding,
     };
 }
 
@@ -136,7 +136,10 @@ impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.tuning)
             .add_message::<WheelLanding>()
-            .configure_sets(FixedUpdate, (VehicleSet::Input, VehicleSet::Control).chain())
+            .configure_sets(
+                FixedUpdate,
+                (VehicleSet::Input, VehicleSet::Control).chain(),
+            )
             .add_systems(FixedUpdate, vehicle_controller.in_set(VehicleSet::Control))
             .add_systems(Update, update_wheel_visuals.in_set(VehicleSet::Visuals));
     }

@@ -120,7 +120,8 @@ impl VehicleSpec {
 
     /// `c = 2ζ√(k·m)` — damper rate at the tuning's fraction of critical.
     pub fn damping_rate(&self, tuning: &VehicleTuning) -> f32 {
-        2.0 * tuning.suspension_damping_ratio * (self.spring_rate(tuning) * self.corner_mass()).sqrt()
+        2.0 * tuning.suspension_damping_ratio
+            * (self.spring_rate(tuning) * self.corner_mass()).sqrt()
     }
 
     /// Static corner load × `suspension_max_g`. A tight cap: the spring stores
@@ -166,9 +167,11 @@ impl VehicleGeometry {
     /// the full Z spread and the full X spread of the set.
     pub fn from_mounts(mounts: &[Vec3; 4]) -> Self {
         let spread = |axis: fn(&Vec3) -> f32| {
-            let (min, max) = mounts.iter().fold((f32::MAX, f32::MIN), |(min, max), mount| {
-                (min.min(axis(mount)), max.max(axis(mount)))
-            });
+            let (min, max) = mounts
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(min, max), mount| {
+                    (min.min(axis(mount)), max.max(axis(mount)))
+                });
             max - min
         };
         Self {
@@ -370,8 +373,18 @@ mod tests {
         let tuning = VehicleTuning::default();
         assert_within(spec.spring_rate(&tuning), 14_000.0, 0.02, "spring rate");
         assert_within(spec.damping_rate(&tuning), 1_500.0, 0.02, "damping rate");
-        assert_within(spec.max_spring_force(&tuning), 6_000.0, 0.02, "max spring force");
-        assert_within(spec.tire_lat_stiffness(&tuning), 3_000.0, 0.02, "tire lateral stiffness");
+        assert_within(
+            spec.max_spring_force(&tuning),
+            6_000.0,
+            0.02,
+            "max spring force",
+        );
+        assert_within(
+            spec.tire_lat_stiffness(&tuning),
+            3_000.0,
+            0.02,
+            "tire lateral stiffness",
+        );
     }
 
     /// The damper's cap is the one that may be loose, because a damper can
@@ -390,9 +403,17 @@ mod tests {
     fn derived_rates_scale_with_mass() {
         let tuning = VehicleTuning::default();
         let heavy = truck();
-        let light = VehicleSpec { mass: 230.0, ..truck() };
+        let light = VehicleSpec {
+            mass: 230.0,
+            ..truck()
+        };
         let ratio = light.mass / heavy.mass;
-        assert_within(light.spring_rate(&tuning), heavy.spring_rate(&tuning) * ratio, 1e-4, "spring rate");
+        assert_within(
+            light.spring_rate(&tuning),
+            heavy.spring_rate(&tuning) * ratio,
+            1e-4,
+            "spring rate",
+        );
         assert_within(
             light.tire_lat_stiffness(&tuning),
             heavy.tire_lat_stiffness(&tuning) * ratio,
