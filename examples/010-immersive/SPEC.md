@@ -1489,6 +1489,342 @@ working.
 - `IMMERSIVE_PROPS=door` / `=grab`, `IMMERSIVE_AUTOPILOT=crates` — all
   unchanged. `cargo test` green (example-010 22); clippy no new warnings.
 
+## Phase 21 — Warehouse layout revamp ✅
+
+The map grew phase-by-phase under a strict "grow, don't move" rule and stopped
+reading as a *place*: a 13 m-tall empty hall with two abstract iron decks 13 m
+apart (one laddered, one only reachable by hand-stacking crates), then a 1.1 m
+door into a 1.5 m corridor → bay → walled yard. Every room existed because a
+mechanic needed a test rig. This phase rebuilds the layout as a warehouse that
+carries the same lockpick loop naturally. **All geometry work is in
+`tools/gen_map.py`; no new entity classes, props, or textures; no Rust
+gameplay module touched** (they all read geometry from `ColliderAabb` or map
+keys — the payoff of that design).
+
+**Rooms now:**
+- **Storage hall** — same 1280×896 footprint, ceiling dropped **512 → 288 u**
+  (13.0 → 7.31 m) so the maintenance platform sits *under* the roof.
+- **Three stepped shelf racks** (`_rack`) replace both decks. 4 iron tiers each,
+  tops z 32/68/108/148, stepping W→E so they climb like a stair (stacked tiers
+  can't be climbed — you hit your head). Rack M's top tier carries the wooden
+  crate (lockpick) + crowbar. Rack S is short and pulled clear of the SE corner.
+- **Maintenance platform** — the old deck A shrunk to a west-wall landing
+  (x −640..−336, y 64..288). Deck top **z 192** and south edge **y 64** are
+  pinned. Future roof hatch = a second `func_ladder` through the ceiling above it.
+- **Management office** — boxed into the SE corner (x 352..640, y −448..−224,
+  z 0..144, standable flat roof). Its **west wall** has the one LOCKED
+  `prop_door` (the lockpick target). The hall's east (loading) wall has a
+  matching **unlocked** exterior `prop_door` on the same y line (−330), so
+  storage → office → yard is a straight walk.
+- **Loading wall** — two large **sealed** truck-door panels (`TRUCK_*`,
+  `DECK`-textured steel, recessed 4 u). Migration to a working roll-up: lift a
+  panel out of `WORLDSPAWN` into a `func_door` entity with `angle -1` — its own
+  phase (`FuncDoor`'s `angle` field is a latent bug, never yet instanced).
+- **Truck yard** — one open apron east of the loading wall (x 656..1456),
+  `skip` lid kept so `make bsp` doesn't leak. `CORRIDOR`/`BAY`/`HANGAR_*` gone.
+
+**Pinned so the verification harness needed no numeric change:** `PLAYER_SPAWN`
+(−448 −256 48), `LADDER_BRUSH`, the platform deck top/south edge, and
+`AUTOPILOT_CRATES`. The old `BIG_CRATE` + 3 stacking crates are kept as floor
+clutter by the truck doors (the weight gate + the `crates(n=4)` liftable count).
+
+**New in `gen_map.py`:** `_wall_with_holes` (a Y-running wall split around a
+list of openings), `_check_overlaps` (flags a brush pair that shares a *volume*
+deeper than one 16 u shell thickness — the round-2 z-fight guard; runs in
+`main()`), `_rack`.
+
+**`devtools.rs` / doc prose:** the `at_door` warps retargeted to the office
+door (Bevy `(8.38, 1, −7.11)` → office → yard); `Shots` fields
+`corridor`/`bay`/`platform_b` → `office`/`yard`/`on_shelf`; screenshot names
+`260910-{office-door,office,yard,on-shelf}.png`. `main.rs` / `config.rs` /
+`lights.rs` / `carry.rs` module docs updated (platform B / crate-stack / corridor
+→ shelf racks / office).
+
+**Verified 2026-09-10** (`PATH` = real nightly toolchain, launched under
+`caffeinate -dis script`):
+- Plain `cargo run` and `IMMERSIVE_AUTOPILOT=1` — map loads, no Avian panic, no
+  fall-through, no z-fighting at the office/yard junctions. Ladder stop-collider
+  still stalls the walk at Bevy `x ≈ −0.65`; `climbing` engages. (The autopilot
+  crest to the platform is FPS-flaky on this machine and does **not** reproduce
+  on the pre-revamp build either — a pre-existing harness limitation, not a
+  regression.)
+- `IMMERSIVE_PROPS=pick IMMERSIVE_TELEMETRY=1 IMMERSIVE_SHOTS=1` — full lockpick
+  chain: `focus=Some("Open door")` at the office door → `use_item: picked the
+  lock` → `doors(open=0/2 locked=1 → locked=0 → open=2/2)`, pack `items 1 → 0`
+  (lockpick spent). Warps land the player grounded in the office and out in the
+  yard (both walkable). Shots `260910-{office-door,office,yard}.png` clean.
+- `IMMERSIVE_TELEMETRY=1` — `lights=18/18 switches_on=1` from frame 1
+  (8 ceiling + 1 platform-underside `main_lights`, 4 `night`, 2 `office`,
+  3 `yard`). The ceiling drop did **not** blow out the exposure at the stock
+  `LAMP_INTENSITY`; the SE corner got one extra `main_lights` lamp. `crates(n=4)`.
+- `_check_overlaps` reports nothing.
+
+**Left for a human (iteration 1):** superseded by iteration 2 below.
+
+### Phase 21 iteration 2 — real pallet racking ✅
+
+Review of iteration 1: the stepped-shelf staircase read as *shop* shelving, not
+a warehouse. Rebuilt (still `gen_map.py`-only, still no new classes/props/
+textures) as forklift-height **pallet racking**:
+
+- **4 long N–S racking runs** (`_pallet_run`, x-centres −448/−180/120/400,
+  88 u wide, y 8..520): 3 `DECK` pallet-level slabs (tops z 64/192/304) on
+  16 u iron uprights (end + mid frames), slabs **inset 16 u in x** so they abut
+  the uprights instead of z-fighting through them. Aisles ≈ 4.6–5.8 m + a north
+  cross-aisle; the whole south strip (y −672..8) is open (spawn / crate-ladder
+  walk / autopilot crates / office aisle).
+- **Only the x −448 run is climbable** — it drops the z-64 slab (nothing in the
+  ladder's drop column) and the **kept `LADDER_BRUSH` (byte-identical)** climbs
+  its south end-frame to the z-192 slab, where the wooden crate + crowbar sit.
+  So `PLAYER_SPAWN`, the ladder walk, the crest z, and `AUTOPILOT_CRATES` are
+  all still pinned — **`config::AUTOPILOT_SCRIPT` needs no numeric change**.
+- **Ceiling z 288 → 432** (~11 m); **footprint `x ±640/y ±448` → `±960/±672`**
+  (≈ 48 × 34 m). `_wall_with_holes` gained a y-span parameter. `HALL_HX`/`HALL_HY`
+  drive everything.
+- **The maintenance PLATFORM shrank to 88 u square** and moved to the **NW
+  corner** with its **own second `func_ladder`** (`LADDER2_*`, emitted in
+  `build()` beside `LADDER_ENTITY`) — `ladder::setup_ladders` already loops every
+  instance, zero Rust. Roof access still future work.
+- **Office → SE corner** at `x 656..960, y −672..−416`; man-door line
+  `_OFF_DOOR_CY −544`. Loading wall / truck panels / yard shifted out to the new
+  shell (`_TRUCK_Y (120, 440)`, yard `x 976..1776`). Clutter crates → the south
+  staging strip.
+- **Lighting grew** — a 4×3 ceiling grid at z 432 + 1 shadow-caster over the
+  crate bay + 1 SE-corner lamp + 1 lamp per rack aisle (hung ~z 320) + 4 wall
+  `night` brackets + 2 (brighter) `office` + 4 `yard` = **26 fixtures**.
+- `devtools.rs` `at_door` warps retargeted (Bevy x ≈ 13.82; z −14.22 / −20.32 /
+  −27.94); `Shots` `platform_b`→`on_shelf` gate + comment; screenshot names
+  `260911-{office-door,office,yard}.png`. Doc prose in `main.rs` / `config.rs` /
+  `carry.rs` (pallet racking, not stepped shelves; z-192 slab; z 432 ceiling).
+
+**Verified 2026-09-11:**
+- Plain run + `IMMERSIVE_AUTOPILOT=1` — no Avian panic, no fall-through, no
+  z-fight; `_check_overlaps` clean. `x` stalls at ≈ −0.65 against the rungs
+  (byte-identical ladder), `climbing` engages, and the climb **crested to
+  `y ≈ 6.4` grounded on the z-192 pallet slab** — the player lands next to the
+  crate.
+- `IMMERSIVE_AUTOPILOT=crates` — `crates(n=4)` at rest, grab (n→3) → charge
+  0→1.5 → throw (`max_y` arcs to ~1.23, `moving=1`) → re-grab → place. As
+  documented.
+- `IMMERSIVE_PROPS=pick` — `focus "Open door"` at the SE office door →
+  `use_item: picked the lock` → `doors(open=0/2 locked=1 → locked=0 →
+  open=2/2)`; warps land the player grounded in the office and out in the yard.
+  Shots clean.
+- `lights=26/26 switches_on=1` from frame 1. Frame-rate held on the M4 Pro at
+  26 real-time spotlights (only 1 shadow-caster). `cargo test --example
+  010-immersive` 22 pass; clippy no new warnings.
+
+**Left for a human:** a real walk-through — the access-ladder climb + break-throw
+from ~4.9 m, whether the 26-lamp bank / rack shadows want tuning, whether 11 m
+× 48 × 34 m reads right, the roof platform's feel, and `make bsp` (needs
+ericw-tools on PATH). The crate rack's end-frame uprights read a touch heavy
+head-on — candidate for thinning.
+
+### Phase 21 iteration 3 — seal the light leaks ✅
+
+A screenshot with the mains off showed light pooling on the hall floor from
+rooms the player couldn't see into — a cool-blue patch along the loading wall,
+and separately a wash on the wall around the office door/switch corner.
+
+**Root cause: lighting, not geometry.** `lights.rs` sets `SpotLight::
+shadows_enabled` straight from a `LightFixture`'s `shadows` field, and
+`config::LAMP_SHADOWS` defaults it `false` — deliberate, `bevy_light`'s own
+docs say keep shadow-casters to "one or two at most", written when this was a
+single 9-lamp room. A light with `shadows_enabled: false` is occluded by
+**nothing** — walls, roofs, doors are all transparent to it; only its cone
+angle and `range` bound it, and `config::LAMP_RANGE` was 30 m, wider than the
+hall is deep. Measured against the three sealed rooms (hall/office/yard),
+**9 of 27 lamps were lighting a room they weren't in** — the always-on `night`
+brackets and `yard` floods (visible even with the mains off, hence what the
+screenshot caught) plus several ceiling lamps sitting over the office's roof.
+
+**The fix, in `gen_map.py` + `config.rs`:**
+- `LAMP_RANGE` 30 m → 20 m — clears a z-432 ceiling lamp's own floor footprint
+  (432/cos 55° ≈ 19.1 m at a 110° cone) with margin, without reaching a
+  neighbouring room. Fixed 8 of the 13 ceiling lamps and all 3 aisle lamps for
+  free.
+- The west pair of `YARD_LAMPS`: x 1150 → 1350 — physically out of reach of
+  the loading wall (the photographed leak), and *improves* yard floor coverage
+  since the cone was wasting half of itself on the wall.
+- **`shadows=1` on 9 more lamps** (1 → 12 total): the 4 SE ceiling-grid lamps
+  sitting over the office roof, the office-corner ceiling lamp, and the 4
+  always-on `night` wall brackets — kept at their original wide cone/30 m
+  range rather than trimmed, so the dark-state look is unchanged; only a
+  shadow map could stop their reach without gutting it. Recorded in
+  `config::LAMP_SHADOWS`'s doc as a deliberate departure from the "one or two"
+  guidance: each is one `SpotLight` shadow map (not a `PointLight`'s six), and
+  there are now three sealed rooms sharing one lamp bank.
+- `SWITCH_LIGHT_RANGE` 3.2 m → 0.8 m — the switch's `PointLight` beacon was
+  mounted on the hall face of a wall it then bled ~2.8 m through. Outside
+  `_check_leaks`'s reach (built at runtime from a brush AABB, not a
+  `light_fixture`), fixed by inspection.
+- **`_check_leaks()`** (`gen_map.py`, called from `main()` before any file is
+  written — stricter than `_check_overlaps`, which only warns after writing):
+  samples each sealed room and flags any `light_fixture` without `shadows=1`
+  whose cone ∩ range crosses into another room, refusing to write the map.
+  Verified both ways: clean on the fixed lamp set, and confirmed to fire (exit
+  1, no files written) when a `shadows=1` is reverted.
+
+**Verified 2026-09-11:**
+- `_check_leaks()` clean, `_check_overlaps` clean, map regenerates
+  deterministically.
+- `IMMERSIVE_PROPS=pick IMMERSIVE_LIGHTS=toggle IMMERSIVE_SHOTS=1
+  IMMERSIVE_TELEMETRY=1` — `lights=27/27 switches_on=1` at load, steps to
+  `lights=10/27 switches_on=0` on toggle (4 night + 2 office + 4 yard, as
+  expected). The `260911-office-door.png` shot (pre-toggle, lit) and
+  `260911-door-unlocked.png` shot (post-toggle, dark, same office-door corner)
+  bracket the toggle: the post-toggle shot shows the reported corner properly
+  dark — no cool wash, no floor bleed — with only the intended warm `night`
+  bracket tint on the near wall. `260911-office.png` / `260911-yard.png`
+  (also post-toggle) show the office and yard still lit by their own
+  always-on circuits with the hall on either side of the doorway staying flat
+  black, i.e. those circuits no longer bleed back through the walls either.
+  `doors(open=2/2 locked=0)` — the lockpick loop is unaffected.
+- `cargo test --example 010-immersive` 22 pass; clippy no new warnings.
+
+**Left for a human:** whether 20 m range dims any corner that wanted more
+reach, and whether the racking — now actually shadowed on the 4 SE ceiling
+lamps — throws canyons that want an extra aisle lamp. Frame time with all 12
+shadow-casters lit was not benchmarked against the pre-fix 1-caster baseline;
+if it regresses, the documented fallback is trimming the `night` brackets'
+cone/range instead of shadowing them (measured clean at cone 110°/range 18 m
+with zero shadow maps, at the cost of losing their long rake across the hall).
+
+## Phase 22 — Debug noclip mode ✅
+
+Free-fly, collision-free debug movement, **on by default**
+(`config::NOCLIP_DEFAULT`), for surveying the reworked warehouse (ceiling
+height, aisle widths, the office/yard) without walking there on foot. `N`
+toggles it at runtime either way.
+
+`bevy_ahoy` has no noclip of its own — its monolithic `run_kcc` marks the spot
+with a comment ("here we'd handle things like spectator, dead, noclip, etc.")
+but implements none of it, and no `CharacterController` field or
+`SpatialQueryFilter` trick produces true 3D flight: `air_move` only ever
+integrates *horizontal* wish velocity, so vertical is gravity-plus-one-jump-
+impulse no matter how collision is filtered. `noclip.rs` brackets the
+controller instead — the exact public-API technique `ladder.rs` already
+established for the same reason: `stash_noclip_input`
+(`RunFixedMainLoop::BeforeFixedMainLoop`) steals the frame's movement wish
+before ahoy runs; `fly` (`FixedPostUpdate`, `.after(AhoySystems::
+MoveCharacters).before(PhysicsSystems::First)`, `ladder::climb`'s own slot)
+writes an absolute `Transform` from the camera's full look direction (pitch
+included — look up + W climbs) plus raw Space/Ctrl vertical thrust, and zeroes
+`LinearVelocity` — discarding whatever `run_kcc` computed that step, same as
+`climb` does for the ladder. `ColliderDisabled` is inserted/removed alongside
+the toggle so a flying player's live collider doesn't shove dynamic crates on
+the way through (not needed for the player's own pass-through, which the
+`Transform` overwrite already guarantees).
+
+**Bug caught during verification, fixed before landing:** a ladder grab (E)
+doesn't check `Noclip` — it's a fully independent system — so with noclip
+on by default, grabbing a ladder left both `ladder::climb` and `noclip::fly`
+writing to the same player in the same `FixedPostUpdate` slot, `fly` stacking
+its own translation on top of `climb`'s absolute write every step (Y in
+telemetry climbed to `4.03` after 6 samples instead of the expected smooth
+ascent). Fixed with `Without<Climbing>` on both `noclip` systems' queries —
+structural, not order-dependent, so it holds regardless of registration order
+between the two.
+
+**Verified 2026-09-12:**
+- `IMMERSIVE_AUTOPILOT=1 IMMERSIVE_TELEMETRY=1` with `NOCLIP_DEFAULT = true` —
+  the ladder script's walk-into-the-wall leg no longer stalls: `x` sails from
+  `4.58` straight through the wall to `-4.95` and beyond, `y` climbs to `9.95`
+  and `z` reaches `20.9` — well past the hall's own bounds, collision-free 3D
+  flight confirmed.
+- Same script with `NOCLIP_DEFAULT` temporarily flipped to `false` — **zero
+  regression**: `x` stalls at `-0.65` against the rungs exactly as before this
+  phase, `climbing` engages, and `y` climbs smoothly (`0.92 → 2.71 → 3.87`)
+  with no double-movement — the `Without<Climbing>` fix confirmed structurally
+  (not just by absence of the symptom).
+- Plain run, `NOCLIP_DEFAULT = true`, no input — position holds steady at
+  spawn with no jitter and no fall-through, confirming the spawn-time
+  `ColliderDisabled` (inserted alongside `Noclip::new(true)` in
+  `player::spawn_player`) starts in sync with the toggle.
+- `cargo test --example 010-immersive` 22 pass; clippy no new warnings (two
+  `#[allow(clippy::type_complexity)]`s added for the noclip-aware queries,
+  the existing codebase idiom — see `src/inventory/`, `src/world_map/`).
+
+**Left for a human:** the fly/vertical speed constants
+(`NOCLIP_SPEED_MPS`/`NOCLIP_VERTICAL_MPS`) are a first guess, best tuned by
+flying it. Toggling `N` itself wasn't exercised under the synthetic-input
+harness (no `IMMERSIVE_*` mode currently injects a raw keyboard key the way
+`press_devtool_button` injects mouse buttons) — its logic mirrors
+`player::player_cursor_input`'s already-proven Tab/Escape raw-key idiom
+closely enough that this was judged low-risk, but a real keypress would be
+the more rigorous check.
+
+**A consequence worth flagging, not a defect:** every existing
+`IMMERSIVE_AUTOPILOT=*` script now drives a *flying* player by default, since
+noclip is on by default — `=1`'s ladder-stall assertion, `=crates`' grab-reach
+assumptions, etc. all assume normal walking collision. Re-verifying any of
+them requires either `NOCLIP_DEFAULT = false` for that run, or pressing `N`
+once at the start of the script (not currently automated).
+
+### Phase 22 amendment (2026-09-13) — noclip didn't actually bypass collision
+
+On real play noclip was "just a flight mode": it still got stopped by walls
+and doors. **The 2026-09-12 verification above was a false positive.** `fly`
+computed `transform.translation += offset` — an *add*, not the absolute
+overwrite the module doc claimed. By the time `fly` runs
+(`.after(AhoySystems::MoveCharacters)`), `Transform` already *is* `run_kcc`'s
+own collision-respecting result for the step, so adding to it is really "ahoy's
+normal blocked-by-walls movement, plus a bit of extra drift" — indistinguishable
+from a speed boost, not real noclip. The original verification's autopilot leg
+happened to "pass through" a thin wall because `AccumulatedInput` was
+suppressed (zero wish velocity → nothing for `run_kcc` to actively collide
+*into*), and the fast additive drift tunnelled past before the next step's
+depenetration caught it — a fast, one-shot fluke, not a real bypass. A
+sustained press (a human walking into a wall, or the `=walk` script's 3.5 s
+forward leg) gets caught by that same per-step depenetration every time.
+
+(`ColliderDisabled`, also from Phase 22, was correctly documented as *not*
+being what makes the player's own pass-through work, and it isn't — it only
+keeps the player from being found as an obstacle **by others** via avian's
+broadphase tree. `bevy_ahoy`'s own sweep casts the player's actual `Collider`
+shape against the world's *un*-disabled colliders regardless of the player's
+own registration, so it was never going to help here. That part didn't need
+to change.)
+
+**Fix:** `Noclip` gained its own tracked `anchor: Option<Vec3>` — the
+`Climbing::height` pattern, generalized to a `Vec3`. `fly` now advances
+`anchor` (never reading `Transform` back as input) and writes it as the sole
+output, immune to whatever `run_kcc` did that step. `anchor` resets to `None`
+on every frame `fly` isn't the one driving (noclip off, or `Climbing` active,
+now read via `Has<Climbing>` as **data** rather than a `Without` filter so the
+system still runs those frames to do the reset) — self-healing: the moment
+`fly` regains control, it reseeds cleanly from wherever the body actually is
+rather than snapping back to a stale pre-climb value. `stash_noclip_input`
+got the same `Without<Climbing>` → `Has<Climbing>` change for consistency,
+though it has no anchor of its own to reset.
+
+**Verified 2026-09-13** (properly this time — sustained pressure, not a fast
+one-shot):
+- `IMMERSIVE_AUTOPILOT=walk IMMERSIVE_TELEMETRY=1`, `NOCLIP_DEFAULT = true` —
+  the 3.5 s continuous-forward leg drives `x` from `4.93` to `-38.56` with no
+  stall anywhere in between, straight through the west wall (at `x ≈ -24.4`)
+  and 14+ m past it into the void. This is the decisive test the original
+  verification lacked.
+- `IMMERSIVE_AUTOPILOT=1` with `NOCLIP_DEFAULT = false` (regression check,
+  post-fix) — `x` stalls at `-0.65`/settles at `-0.4176` exactly as always,
+  `climbing` engages and `y` climbs smoothly (`0.92 → 2.71 → 3.82 → 5.56`) —
+  the query-shape change (`Has<Climbing>` vs `Without<Climbing>`) didn't
+  disturb the non-noclip path.
+- `IMMERSIVE_AUTOPILOT=1` with noclip on — crate `max_y` stays flat at `0.40`
+  throughout, confirming `ColliderDisabled` still protects dynamic crates.
+- The ladder-handoff scenario (grab a ladder *while* noclipping, confirm no
+  snap-back on release) could not be reliably reproduced through the pinned
+  autopilot script — its walk-to-the-ladder choreography is tuned for
+  `MOVE_SPEED` (4.5 m/s) and noclip's default 8 m/s overshoots it before `E`
+  ever focuses the rungs; temporarily matching `NOCLIP_SPEED_MPS` to `4.5`
+  didn't line up either (the script's yaw/positioning assumes real walking
+  physics, not free 3D flight along a camera ray). Verified by construction
+  instead: `anchor` is unconditionally cleared to `None` on every frame
+  `!noclip.active || climbing`, with no code path that could leave it stale —
+  left for a human to confirm by hand (grab a ladder mid-flight, let go,
+  watch for a snap).
+- `cargo test --example 010-immersive` 22 pass; clippy no new warnings.
+
 ## Environment notes
 
 - TrenchBroom.app is installed on this Mac (`~/Library/Application Support/TrenchBroom` exists) — the game config + FGD write on every `cargo run` (`bevy_trenchbroom::config::writing` info logs confirm success).

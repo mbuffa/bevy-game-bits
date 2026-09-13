@@ -105,14 +105,38 @@ pub const MOVE_STOP_SPEED: f32 = 1.0;
 /// mistimed crate hop can't be fully saved in the air.
 pub const AIR_ACCEL_HZ: f32 = 1.5;
 
+// --- Noclip (debug) --------------------------------------------------------
+//
+// `bevy_ahoy` has no noclip of its own — its monolithic `run_kcc` marks the
+// spot with a comment ("here we'd handle things like spectator, dead, noclip,
+// etc.") but implements none of it, and no combination of its knobs produces
+// true 3D flight: `air_move` only ever integrates *horizontal* wish velocity,
+// so vertical is gravity-plus-one-jump-impulse no matter how collision is
+// filtered. `noclip.rs` brackets the controller instead, the same public-API
+// technique `ladder.rs` already uses for the same reason (see that module's
+// doc). On by default — flip this and rebuild to start grounded instead; `N`
+// toggles it either way at runtime.
+pub const NOCLIP_DEFAULT: bool = true;
+
+/// Horizontal+vertical fly speed (m/s) along the camera's own look direction
+/// (pitch included — looking up and holding W climbs). Well over `MOVE_SPEED`:
+/// this is a fly-cam for surveying the map, not a careful walk.
+pub const NOCLIP_SPEED_MPS: f32 = 8.0;
+
+/// Pure vertical thrust (m/s) from holding Space (up) / Ctrl (down) on top of
+/// whatever the look-direction flight already contributes — so straight-down
+/// or straight-up movement doesn't require pointing the camera at the floor
+/// or ceiling first.
+pub const NOCLIP_VERTICAL_MPS: f32 = 6.0;
+
 // --- Crates (carryable props) ----------------------------------------------
 //
-// Metal crates the player grabs with RMB (then throws/places with LMB) and
-// stacks to reach platform B (deck top 4.88 m). The map pre-places one big
-// ~800 kg crate (1.6 m, too heavy to lift) against the deck's south edge; the
-// player hops onto it and stacks two loose 0.8 m crates on top
-// (1.6 + 0.8 + 0.8 = 3.2 m, + a 1.8 m jump clears the deck). `PropCrate::size`
-// / `mass` are per-entity; these are the defaults. See SPEC.md Phase 8 / 19.
+// Metal crates the player grabs with RMB (then throws/places with LMB). Since
+// the Phase 21 map revamp a ladder on the pallet racking (not a crate stack) is
+// the climb to height; the crates are floor clutter + the weight gate + the
+// autopilot's grab/throw/place rig. One ~800 kg crate (1.6 m) stays too heavy
+// to lift. `PropCrate::size` / `mass` are per-entity; these are the defaults.
+// See SPEC.md Phase 8 / 19 / 21.
 
 /// Default edge length (meters) of a crate cube.
 pub const CRATE_SIZE: f32 = 0.8;
@@ -169,12 +193,21 @@ pub const CARRY_THROW_SPEED: f32 = 12.0;
 
 // --- Lighting ------------------------------------------------------------
 //
-// Phase 9: the warehouse starts dark. There is **no** sun — the room is lit
-// only by hanging `LightFixture` lamps (`lights.rs`), and the big overhead
-// bank is off until the player finds the wall switch on platform B. The
+// Phase 12: the warehouse loads LIT (was dark in Phase 9). There is **no**
+// sun — the room is lit only by hanging `LightFixture` lamps (`lights.rs`); the
+// big overhead bank starts on and the wall switch (by the office door since
+// Phase 21) toggles it. Phase 21 (iter 2) put the ceiling at z 432 (~11 m) and
+// grew the floor ~2.25x, so the lamp grid grew; `LAMP_INTENSITY` may still want
+// a retune. The
 // Phase 1 "real-time PointLight whites the frame out" bug no longer
 // reproduces on this build (both a `PointLight` and a `SpotLight` at
 // ~300k lm render correctly — verified 2026-09-09, see SPEC.md Known issues).
+//
+// Phase 21 also turned up a real bug once the one hall grew into three sealed
+// rooms (hall / office / yard): an unshadowed lamp is occluded by nothing, so
+// several lamps were lighting a room they weren't in. See [`LAMP_RANGE`] and
+// [`LAMP_SHADOWS`] for the fix and `gen_map.py`'s `_check_leaks()` for the
+// guard that now catches a regression at generation time.
 
 /// `GlobalAmbientLight::brightness` while the main lights are off — a
 /// near-black void. Just enough that a surface the always-on pillar brackets
@@ -195,18 +228,38 @@ pub const AMBIENT_LIT: f32 = 220.0;
 pub const LAMP_INTENSITY: f32 = 2_000_000.0;
 
 /// Default `SpotLight::range` (metres). Also caps shadow-map resolution, so
-/// it's a ceiling on how far the cone reaches, not a target.
-pub const LAMP_RANGE: f32 = 30.0;
+/// it's a ceiling on how far the cone reaches — **and it *is* the light's
+/// actual reach**, not just a resolution knob: a lamp with `shadows=0` (the
+/// default) is occluded by nothing, so its cone lights straight through any
+/// wall inside this radius. 20 m clears a z-432 ceiling lamp's own floor
+/// footprint (432/cos(55°) ≈ 19.1 m at a 110° cone) with a little margin,
+/// without reaching into a neighbouring room — the old 30 m was wider than
+/// the hall is deep and was the root cause of the Phase 21 light-leak bug
+/// (SPEC.md). A lamp that genuinely needs more reach overrides `range`
+/// per-fixture and should usually pair it with `shadows=1`.
+pub const LAMP_RANGE: f32 = 20.0;
 
 /// Default full cone angle (degrees) of a lamp's `SpotLight`. `lights.rs`
 /// splits it into inner/outer for a soft edge.
 pub const LAMP_CONE_DEG: f32 = 95.0;
 
-/// Default: do lamps cast real-time shadows? Off — `bevy_light`'s own docs
-/// say keep shadow-casters to "one or two at most", and there are eight-plus
-/// fixtures. The map turns `"shadows" "1"` on for the single lamp over the
-/// crate-stacking spot, where a cast shadow actually helps you judge a
-/// stack's height.
+/// Default: do lamps cast real-time shadows? Off — a lamp with shadows off
+/// costs nothing but is occluded by nothing (see [`LAMP_RANGE`]), so this is
+/// only safe for a lamp whose cone∩range provably never crosses into another
+/// room. The map turns `"shadows" "1"` on for every lamp that can't make that
+/// promise by geometry alone: the crate-stacking spot (a cast shadow there
+/// helps judge a stack's height), the SE ceiling lamps sitting over the
+/// office's roof, the office's own two lamps, and the four always-on `night`
+/// wall brackets (kept at their original wide cone/long range rather than
+/// trimmed, so the dark-state look is unchanged). That is 12 shadow-casting
+/// `SpotLight`s, a deliberate departure from `bevy_light`'s "one or two at
+/// most" guidance written when this was a single 9-lamp room — each is one
+/// shadow map (a `SpotLight`, not a `PointLight`'s six), and there are now
+/// three sealed rooms sharing one lamp bank, so correctness of "a room's
+/// walls actually block its neighbour's lights" won out over the budget.
+/// `gen_map.py`'s `_check_leaks()` is what actually enforces this — refusing
+/// to write a map where an unshadowed lamp's lit volume crosses a room
+/// boundary — rather than this comment alone (SPEC.md Phase 21).
 pub const LAMP_SHADOWS: bool = false;
 
 /// Warm-white tint of a warehouse lamp.
@@ -259,7 +312,14 @@ pub const SWITCH_LIGHT_OFF_COLOR: Color = Color::srgb(1.0, 0.1, 0.05);
 pub const SWITCH_LIGHT_ON_COLOR: Color = Color::srgb(0.25, 1.0, 0.35);
 pub const SWITCH_LIGHT_OFF_INTENSITY: f32 = 6_500.0;
 pub const SWITCH_LIGHT_ON_INTENSITY: f32 = 3_000.0;
-pub const SWITCH_LIGHT_RANGE: f32 = 3.2;
+/// Kept small on purpose: this is a `PointLight` (unshadowed — six shadow
+/// faces is too much for an indicator beacon) mounted on the hall face of the
+/// office wall, so anything past ~1 m bleeds straight through into the
+/// office. It's built at runtime from the switch brush's AABB
+/// (`lights.rs::setup_switches`), not a `light_fixture`, so it's outside
+/// `gen_map.py`'s `_check_leaks()` reach — fixed by inspection instead
+/// (SPEC.md Phase 21).
+pub const SWITCH_LIGHT_RANGE: f32 = 0.8;
 /// Interact prompt shown on the switch in each state (mutated onto the
 /// existing `Interactable::prompt` — `ui::update_prompt` renders it as-is).
 pub const SWITCH_PROMPT_OFF: &str = "Turn on the lights";
@@ -413,9 +473,9 @@ pub const DOOR_PROMPT_LOCKED: &str = "Locked — needs a lockpick";
 //
 // A wooden crate that holds an item. Spawned Dynamic and light so `carry.rs`
 // lifts and throws it with no changes (the grab gate is body-type + mass, and
-// never checks for `PropCrate`). Throwing it off platform B onto the concrete
-// is the intended way to open it; the crowbar (Phase 16) is the shortcut.
-// See SPEC.md Phase 10.
+// never checks for `PropCrate`). Throwing it off the crate rack's z-192 pallet
+// slab onto the concrete is the intended way to open it; the crowbar (Phase 16)
+// is the shortcut. See SPEC.md Phase 10 / 21.
 
 /// Default wooden-crate edge length (metres). Smaller than a metal
 /// `CRATE_SIZE` crate so it reads as different at a glance.
@@ -435,8 +495,9 @@ pub const WOOD_COLOR: Color = Color::srgb(0.5, 0.36, 0.22);
 /// `min_delta_v` idea.
 pub const BREAK_MIN_DELTA_V: f32 = 6.0;
 /// Damage per m/s of contact Δv *past* [`BREAK_MIN_DELTA_V`]. Tuned so a drop
-/// off platform B (deck top 4.88 m → ~16.8 m/s at the floor) shatters a
-/// full-health crate in one hit and a 12 m/s throw into a wall also breaks it.
+/// off the crate rack's z-192 pallet slab (~4.9 m → ~16.8 m/s at the floor under
+/// the game's 29 m/s² gravity) shatters a full-health crate in one hit and a
+/// 12 m/s throw into a wall also breaks it.
 pub const BREAK_DAMAGE_PER_DELTA_V: f32 = 22.0;
 /// Damage one crowbar swing deals to a `Breakable`. Under [`WOOD_CRATE_HEALTH`]
 /// so it takes more than one hit. Read by the "use active item" verb
@@ -610,7 +671,7 @@ pub const AUTOPILOT_TAP_SECS: f32 = 0.15;
 /// The keyboard-free ladder check. In order: walk straight into the rungs with
 /// no E press — `climbing` must stay false (no on-contact grab) and `x` must
 /// stall at ~-0.67 against the visual's solid collider (without it the body
-/// walks clean through, under deck A, to the west wall at x ~-11); then a short
+/// walks clean through, under the platform, to the west wall at x ~-11); then a short
 /// approach pressing E (mounts only when the "use" ray focuses the ladder,
 /// never on contact) — grab #1, with no
 /// jump held, the baseline; press E again to toggle off and drop to the floor
@@ -626,7 +687,7 @@ pub const AUTOPILOT_TAP_SECS: f32 = 0.15;
 /// **let go** (the STILL leg's `y` must stay flat with `climbing` still true —
 /// the stop-when-released check; pre-fix the last wish sticks and `y` climbs on
 /// regardless), then resume and the top-of-range rule steps the body onto
-/// platform A (`grounded`, `y` ~5.8). Pre-fix the detached body instead walks
+/// the crate rack's z-192 pallet slab (`grounded`, `y` ~5). Pre-fix the detached body instead walks
 /// forward through the sensor and on to the far wall (`x` ~-11, `y` ~0.9),
 /// platform never reached — the binary regression signal.
 /// Each interact leg is one `AUTOPILOT_TAP_SECS` E press starting the frame the
@@ -641,7 +702,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
     // Walk into the ladder, no E press. Two proofs in one leg: `climbing` stays
     // false while the body is pressed against the rungs (no on-contact grab),
     // and `x` stalls at ~-0.67 — the visual's solid collider. Without that
-    // collider the body walks straight through, under deck A, to the west wall
+    // collider the body walks straight through, under the platform, to the west wall
     // at x ~-11, y ~0.9 (the binary regression signal).
     AutopilotStep {
         duration: 3.0,
@@ -737,7 +798,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
     // Let go mid-climb. The stop-when-released check: `y` must be *constant*
     // across every telemetry sample of this leg with `climbing` still true.
     // Pre-fix `stash_input` keeps the last non-zero wish, so `y` keeps rising,
-    // tops out and crests onto platform A during this leg instead.
+    // tops out and crests onto the crate rack's z-192 pallet slab during this leg instead.
     AutopilotStep {
         duration: 1.5,
         movement: STILL,
@@ -749,7 +810,7 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
         pitch_deg: 0.0,
     },
     // Resume: the climb restarts from where it hung, reaches the top and the
-    // top-of-range rule steps onto platform A (`grounded`, `y` ~5.8). Pre-fix
+    // top-of-range rule steps onto the crate rack's z-192 pallet slab (`grounded`, `y` ~5). Pre-fix
     // the detached body is already on the far wall by now (`y` ~0.9).
     AutopilotStep {
         duration: 3.0,
@@ -785,8 +846,8 @@ pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
 ///
 /// `crates(n=)` in telemetry counts only *liftable* crates (mass <=
 /// `CARRY_MAX_MASS`) — 4 at rest here: the autopilot's normal crate + the 3
-/// stacking crates by platform B. The heavy crates (400 kg, 800 kg) don't
-/// count.
+/// clutter crates in the south staging strip. The heavy crates (400 kg, 800 kg)
+/// don't count.
 ///
 /// Legs and their binary signals (read from `IMMERSIVE_TELEMETRY`):
 ///  1. walk into the crate, no button — `crates(moving)` stays 0 and its

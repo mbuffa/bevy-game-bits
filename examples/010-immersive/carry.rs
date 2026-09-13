@@ -1,6 +1,7 @@
 //! Grab / carry / place / charged-throw for `PropCrate` metal crates — the
-//! repo's first dynamic rigid bodies, and the way onto platform B (stack them
-//! into a staircase, since it has no ladder). See SPEC.md Phase 8 / 19.
+//! repo's first dynamic rigid bodies. Since the Phase 21 map revamp a ladder on
+//! the pallet racking is the climb to height; crates are clutter, the weight
+//! gate, and the autopilot's grab/throw/place rig. See SPEC.md Phase 8 / 19 / 21.
 //!
 //! **Controls:** RMB (`Grab`) grabs an aimed crate; while carrying, RMB does
 //! nothing and **LMB (`Throw`)** handles it — a tap places it ahead, a
@@ -92,9 +93,9 @@ pub fn setup_crate_assets(mut commands: Commands, mut materials: ResMut<Assets<S
 
 /// `PropCrate` from the map → a real dynamic crate, sized from `size` and
 /// weighted from `mass` (which doubles as the lift gate — see the module
-/// docs). The ~800 kg base crate under platform B is just a very heavy one of
+/// docs). The ~800 kg 1.6 m clutter crate is just a very heavy one of
 /// these; nothing lifts it, and `PLAYER_PUSH_MASS` (0.5) can't nudge it, so it
-/// serves as a fixed step. (A *liftable* crate bigger than `CRATE_SIZE` would
+/// stays put as the weight gate. (A *liftable* crate bigger than `CRATE_SIZE` would
 /// want `CARRY_DISTANCE`/`CARRY_DROP` scaled for the hold pose — not a case
 /// today.)
 pub fn spawn_crates(

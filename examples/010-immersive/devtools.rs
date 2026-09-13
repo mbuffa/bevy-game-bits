@@ -25,7 +25,7 @@
 //! - `IMMERSIVE_SHOTS=1` — take in-app screenshots at scripted checkpoints.
 //! - `IMMERSIVE_LIGHTS=on` — every fixture/switch comes up energised.
 //! - `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` at the wall switch once,
-//!   ~2.5 s in (the switch is only reachable by a hand-built crate stack).
+//!   ~2.5 s in (skips the "use" raycast, which the ladder already proves).
 //! - `IMMERSIVE_AUDIO=log` — echo every `PlaySfx` request (clip, volume, pitch).
 //! - `IMMERSIVE_PROPS=grab` — spawn a test `item_pickup` ahead and hold real
 //!   RMB, so the `Start<Grab>` → `pickup::collect_on_grab` path is under test.
@@ -59,8 +59,8 @@ pub fn env_flag(name: &str) -> bool {
 }
 
 /// `IMMERSIVE_LIGHTS=on` — every `LightFixture` / `FuncLightSwitch` comes up
-/// energised regardless of its `start_on`, so the lit warehouse can be
-/// iterated on without first building a crate stack to reach the switch.
+/// energised regardless of its `start_on`, so a dark-loading warehouse can be
+/// iterated on without walking to the switch.
 pub fn force_lights_on() -> bool {
     std::env::var("IMMERSIVE_LIGHTS")
         .map(|v| v == "on")
@@ -68,14 +68,14 @@ pub fn force_lights_on() -> bool {
 }
 
 /// `IMMERSIVE_LIGHTS=toggle` — fire `Interacted` straight at the wall switch
-/// once, a couple of seconds in. The switch sits where only a hand-built
-/// crate stack reaches, which no autopilot can do; the "use" raycast that
-/// finds it is the same `SpatialQuery::cast_ray` the ladder already proves,
-/// so the harness skips straight to the event and exercises the part that's
-/// new: `lights::toggle_on_interact` → `Powered` → the `sync_*` mirrors →
-/// `GlobalAmbientLight`. Read with `IMMERSIVE_TELEMETRY=1`: `lights=4/12`
-/// (the 4 always-on pillar brackets) must step to `lights=12/12 switches_on=1`
-/// exactly once and stay, and the 4 brackets are unaffected.
+/// once, a couple of seconds in. The "use" raycast that finds it is the same
+/// `SpatialQuery::cast_ray` the ladder already proves, so the harness skips
+/// straight to the event and exercises the part that's new:
+/// `lights::toggle_on_interact` → `Powered` → the `sync_*` mirrors →
+/// `GlobalAmbientLight`. The warehouse loads lit, so read with
+/// `IMMERSIVE_TELEMETRY=1`: `lights=N/N switches_on=1` must step DOWN to the
+/// always-on `night`/`office`/`yard` count with `switches_on=0` exactly once
+/// (lit→dark), and those circuits are unaffected.
 pub fn auto_toggle_switch(
     switches: Query<Entity, With<crate::lights::SwitchState>>,
     mut commands: Commands,
@@ -101,12 +101,13 @@ pub fn auto_toggle_switch(
 /// in, so `shatter` runs and the telemetry `wood_crates` count drops to 0 as
 /// `pickups` rises — the shattered crate's contained item appearing on the
 /// floor. `=locked` fires `Interacted` at every door once and expects the
-/// prompt to read "Locked" and the door not to move. There is only one door
-/// now (the locked one), so `=door` and `=locked` behave the same. `=pick`
-/// (Phase 16) warps to the door, hands the player an active lockpick, holds the
-/// real `MouseButton::Left` (`press_devtool_button`) to pick the lock, fires
-/// `Interacted` to open it, then walks into the corridor for a lighting shot —
-/// telemetry `doors(... locked=1)` → `locked=0` → `open=1/1`. `=grab` (Phase 18)
+/// locked office door's prompt to read "Locked" and that leaf not to move (the
+/// unlocked exterior door is also hit and does swing). `=pick`
+/// (Phase 16) warps to the locked office door, hands the player an active
+/// lockpick, holds the real `MouseButton::Left` (`press_devtool_button`) to pick
+/// the lock, fires `Interacted` to open it, then walks through the office and
+/// out to the yard for the shots — telemetry `doors(... locked=1)` →
+/// `locked=0` → `open=1/2` (two doors now, one was ever locked). `=grab` (Phase 18)
 /// spawns one `item_pickup` a crosshair-length ahead of the player at frame 30
 /// and holds the real `MouseButton::Right` (`press_devtool_button`, frames
 /// 60–70) — expect the `pickup: collected` log line, telemetry `pickups 1 → 0`
@@ -115,7 +116,7 @@ pub fn auto_toggle_switch(
 /// `MouseButton::Right` (`press_devtool_button`, frames 150–160) — the RMB
 /// press goes through the real binding to `Fire<Interact>` →
 /// `door::toggle_swing_on_interact`, proving RMB is an interact button.
-/// Telemetry: `doors(locked 1 → 0)` then `open 0/1 → 1/1`.
+/// Telemetry: `doors(locked 1 → 0)` then `open 0/2 → 1/2`.
 pub fn props_mode() -> Option<String> {
     std::env::var("IMMERSIVE_PROPS").ok()
 }
@@ -152,33 +153,33 @@ pub fn exercise_props(
     *frame += 1;
     let at_door = matches!(mode.0.as_str(), "door" | "locked" | "pick" | "rmbdoor");
 
-    // Warp + hold the view down the east extension so the screenshots actually
-    // frame what this devtool exercises. Bevy: the east-wall doorway is at
-    // z ≈ -16.5, centred on x ≈ 0; -Z (yaw 0) faces it (and the bay / yard
-    // beyond). `pick` walks it in stages so each junction is captured clean:
-    //   90–235   2 m in front of the door
-    //   236–299  a few metres into the (now-open) corridor
-    //   300–420  into the bay, facing the large yard opening
+    // Warp + hold the view at the LOCKED office door so the screenshots frame
+    // what this devtool exercises. The office man-door hole is on the y line
+    // TB y -544 → Bevy x 13.82; -Z (yaw 0) faces TB +X, i.e. the door (and the
+    // office / yard beyond, all on the same line). `pick` walks it in stages:
+    //   90–235   ~2 m in front of the locked door, in the storage hall
+    //   236–299  through it, standing in the office
+    //   300–420  out the office's exterior door, in the truck yard
     if at_door && (90..420).contains(&*frame) {
         let z = match (mode.0.as_str(), *frame) {
-            ("pick", f) if f >= 300 => -40.0,
-            ("pick", f) if f >= 236 => -22.0,
-            _ => -14.2,
+            ("pick", f) if f >= 300 => -27.94,
+            ("pick", f) if f >= 236 => -20.32,
+            _ => -14.22,
         };
         let facing = Quat::from_euler(EulerRot::YXZ, 0.0, -0.10, 0.0);
         if let Ok((mut t, mut look)) = player.single_mut() {
-            t.translation = Vec3::new(0.0, 1.0, z);
+            t.translation = Vec3::new(13.82, 1.0, z);
             (look.yaw, look.pitch) = (0.0, -0.10);
         }
         if let Ok(mut cam_t) = camera.single_mut() {
             cam_t.rotation = facing;
         }
         if *frame == 90 {
-            info!("devtools: warped + holding player at the corridor door");
+            info!("devtools: warped + holding player at the office door");
         } else if *frame == 300 && mode.0 == "pick" {
-            info!("devtools: warped player into the bay for the far-junction shot");
+            info!("devtools: warped player into the yard for the far shot");
         } else if *frame == 236 && mode.0 == "pick" {
-            info!("devtools: warped player into the corridor for the light shot");
+            info!("devtools: warped player into the office for the mid shot");
         }
     }
 
@@ -206,7 +207,7 @@ pub fn exercise_props(
         }
     }
 
-    // `rmbdoor` (Phase 20): the map's one door is locked, so clear the lock at
+    // `rmbdoor` (Phase 20): the office door is locked, so clear every lock at
     // frame 140 and let the *real RMB press* (`press_devtool_button`, frames
     // 150–160 → binding → `Fire<Interact>` → `Interacted`) open it. No
     // `commands.trigger` here — the binding is exactly what's under test.
@@ -362,10 +363,10 @@ pub fn exercise_inventory(
             } else if *frame == 116 {
                 keys.release(KeyCode::Digit1);
             }
-            // Warp + hold at the locked door (same geometry as exercise_props).
+            // Warp + hold at the locked office door (same geometry as exercise_props).
             if (90..320).contains(&*frame) {
                 if let Ok((mut t, mut look)) = player.single_mut() {
-                    t.translation = Vec3::new(0.0, 1.0, -14.2);
+                    t.translation = Vec3::new(13.82, 1.0, -14.22);
                     (look.yaw, look.pitch) = (0.0, -0.10);
                 }
                 if let Ok(mut cam_t) = camera.single_mut() {
@@ -796,13 +797,13 @@ pub struct Shots {
     lock_view: bool,
     on_platform: bool,
     carrying: bool,
-    platform_b: bool,
     lights_dark: bool,
     lights_lit: bool,
     door: bool,
     door_unlocked: bool,
-    corridor: bool,
-    bay: bool,
+    office: bool,
+    yard: bool,
+    on_shelf: bool,
     pack_open: bool,
     viewmodel: bool,
     quickbar_drag: bool,
@@ -810,7 +811,7 @@ pub struct Shots {
 
 /// State- and frame-gated screenshots, each fired once. The ladder-standoff
 /// and on-platform shots are keyed on state (their timing drifts with FPS);
-/// the corridor/bay/inventory shots are frame-gated to the matching devtool
+/// the office/yard/inventory shots are frame-gated to the matching devtool
 /// run.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn take_screenshot(
@@ -886,54 +887,51 @@ pub fn take_screenshot(
     let Ok((transform, state, climbing, carrying)) = player.single() else {
         return;
     };
-    // In front of the east-wall corridor door (the `IMMERSIVE_PROPS` warp
-    // parks the player here) — the shot for the door's fit in its frame.
-    let at_corridor_door =
-        transform.translation.x.abs() < 2.0 && (-15.5..-12.0).contains(&transform.translation.z);
-    if !done.door && *frame > 140 && at_corridor_door {
+    // In front of the locked office door (the `IMMERSIVE_PROPS` warp parks the
+    // player here, Bevy x ≈ 13.82, z ≈ -14.22) — the shot for the door's fit.
+    let at_office_door = (12.5..15.0).contains(&transform.translation.x)
+        && (-16.0..-12.0).contains(&transform.translation.z);
+    if !done.door && *frame > 140 && at_office_door {
         done.door = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
-                "screenshots/010-immersive/260909-corridor-door.png",
+                "screenshots/010-immersive/260911-office-door.png",
             ));
     }
     // `IMMERSIVE_PROPS=pick`: after the LMB window (frames 130–150) and before
     // the E-open (frame 210) — the door still shut but its lock plate green.
-    if !done.door_unlocked && *frame == 190 && at_corridor_door {
+    if !done.door_unlocked && *frame == 190 && at_office_door {
         done.door_unlocked = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
-                "screenshots/010-immersive/260910-door-unlocked.png",
+                "screenshots/010-immersive/260911-door-unlocked.png",
             ));
     }
-    // `IMMERSIVE_PROPS=pick`: warped a few metres into the corridor (z ≈ -22)
-    // after the door opened — the wall-bracket lighting + a clean ceiling all
-    // the way to the bay.
-    if !done.corridor
+    // `IMMERSIVE_PROPS=pick`: warped into the office (z ≈ -20.32) after the door
+    // opened — facing the exterior door and the yard beyond.
+    if !done.office
         && *frame == 280
-        && transform.translation.x.abs() < 2.0
-        && (-25.0..-19.0).contains(&transform.translation.z)
+        && (12.5..15.0).contains(&transform.translation.x)
+        && (-23.0..-18.0).contains(&transform.translation.z)
     {
-        done.corridor = true;
+        done.office = true;
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(
-                "screenshots/010-immersive/260910-corridor.png",
-            ));
+            .observe(save_to_disk("screenshots/010-immersive/260911-office.png"));
     }
-    // `IMMERSIVE_PROPS=pick`: warped into the bay (z ≈ -40) facing the large
-    // yard opening — both new junctions (corridor→bay, bay→yard) in one frame.
-    if !done.bay
+    // `IMMERSIVE_PROPS=pick`: warped out into the truck yard (z ≈ -27.94) — the
+    // exterior of the loading wall with its two sealed truck-door panels.
+    if !done.yard
         && *frame == 380
-        && transform.translation.x.abs() < 2.0
-        && (-45.0..-35.0).contains(&transform.translation.z)
+        && (12.5..15.0).contains(&transform.translation.x)
+        && (-31.0..-24.0).contains(&transform.translation.z)
     {
-        done.bay = true;
+        done.yard = true;
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk("screenshots/010-immersive/260910-bay.png"));
+            .observe(save_to_disk("screenshots/010-immersive/260911-yard.png"));
     }
     if !done.lock_view && climbing.is_some() && transform.translation.y > 2.5 {
         done.lock_view = true;
@@ -948,7 +946,7 @@ pub fn take_screenshot(
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
-                "screenshots/010-immersive/260908-on-platform-a.png",
+                "screenshots/010-immersive/260908-on-platform.png",
             ));
     }
     // Phase 8: the ghost crate at arm's length + charge slider.
@@ -960,13 +958,14 @@ pub fn take_screenshot(
                 "screenshots/010-immersive/260909-carrying-crate.png",
             ));
     }
-    // Phase 8: standing on platform B (deck top 4.88 m) after a crate stack.
-    if !done.platform_b && state.grounded.is_some() && transform.translation.y > 4.5 {
-        done.platform_b = true;
+    // Phase 21: standing on the crate rack's z-192 pallet slab (≈ 4.9 m;
+    // standing eye ≈ 5.5 m) after climbing its access ladder.
+    if !done.on_shelf && state.grounded.is_some() && transform.translation.y > 4.4 {
+        done.on_shelf = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(
-                "screenshots/010-immersive/260909-on-platform-b.png",
+                "screenshots/010-immersive/260911-on-shelf.png",
             ));
     }
 }

@@ -16,15 +16,19 @@
 //! pick the active quickbar slot (an empty or already-active slot frees your
 //! hands), and it's drawn in your hands. With free hands, LMB uses the active
 //! item — a lockpick on a locked door (one use), a crowbar on a wooden crate.
+//! `N` toggles debug noclip (`noclip.rs`) — free flight through walls, no
+//! collision, no gravity, **on by default** (`config::NOCLIP_DEFAULT`).
 //!
-//! The loop (Phases 10–16): the warehouse loads lit. Stack crates to reach
-//! platform B, where a wooden crate and a crowbar sit. Carry the crate to the
-//! deck edge and LMB-throw it off — it shatters and drops a lockpick. RMB to
-//! pick both up (Tab shows the pack), make the lockpick active (key `1`), LMB
-//! the east-wall door to pick the lock — the lockpick is spent — then RMB (or
-//! E) to open it, and walk the corridor → the bay → out through the large
-//! opening to the yard. The platform-B wall switch still toggles the whole
-//! ceiling bank.
+//! The loop (Phases 10–16, map revamp Phase 21): the warehouse storage hall
+//! loads lit. Climb the access ladder on the one climbable pallet rack — its
+//! z-192 shelf holds a wooden crate and a crowbar. Carry the crate to the shelf
+//! edge and LMB-throw it off — it shatters on the concrete and drops a lockpick.
+//! RMB to pick both up (Tab
+//! shows the pack), make the lockpick active (key `1`), LMB the LOCKED office
+//! door (the corner office's west wall) to pick the lock — the lockpick is
+//! spent — then RMB (or E) to open it, cross the management office and out its
+//! exterior door to the truck yard. The wall switch by the office door still
+//! toggles the whole ceiling bank.
 
 mod breakable;
 mod carry;
@@ -38,6 +42,7 @@ mod interact;
 mod items;
 mod ladder;
 mod lights;
+mod noclip;
 mod pickup;
 mod player;
 mod trenchbroom;
@@ -128,6 +133,7 @@ fn main() {
         (
             player::player_cursor_input,
             player::sync_cursor_mode,
+            noclip::toggle_noclip,
             interact::update_focus,
             carry::advance_charge,
             door::drive_doors,
@@ -151,18 +157,22 @@ fn main() {
         PostUpdate,
         (ladder::turn_to_ladder, carry::hold_prop).before(TransformSystems::Propagate),
     )
-    // Ladder climbing brackets bevy_ahoy's controller: read intent before it
-    // runs, overwrite the result after. See `ladder.rs`.
+    // Ladder climbing and debug noclip both bracket bevy_ahoy's controller:
+    // read intent before it runs, overwrite the result after. See `ladder.rs`
+    // / `noclip.rs`. A player is never in both modes at once, so their
+    // relative order doesn't matter.
     //
-    // `stash_input` runs once per *frame* (not per fixed step): it `take`s
-    // `AccumulatedInput::last_movement` and treats a missing value as
-    // "released". `AccumulatedInput` has a one-frame lifetime — ahoy clears it
-    // in `AfterFixedMainLoop` — so taking it here feeds every substep the same
-    // intent, exactly as ahoy reads it. In `FixedPostUpdate` a second substep
-    // would see `None` and stall the climb.
+    // `stash_input`/`stash_noclip_input` run once per *frame* (not per fixed
+    // step): they `take` `AccumulatedInput::last_movement` and treat a
+    // missing value as "released". `AccumulatedInput` has a one-frame
+    // lifetime — ahoy clears it in `AfterFixedMainLoop` — so taking it here
+    // feeds every substep the same intent, exactly as ahoy reads it. In
+    // `FixedPostUpdate` a second substep would see `None` and stall the climb
+    // / flight.
     .add_systems(
         RunFixedMainLoop,
-        ladder::stash_input.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+        (ladder::stash_input, noclip::stash_noclip_input)
+            .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
     )
     .add_systems(
         FixedPostUpdate,
@@ -173,11 +183,15 @@ fn main() {
             ladder::climb
                 .after(AhoySystems::MoveCharacters)
                 .before(PhysicsSystems::First),
-            // After the climb's absolute position write, so a ladder step is
-            // visible as a `Transform` delta.
+            noclip::fly
+                .after(AhoySystems::MoveCharacters)
+                .before(PhysicsSystems::First),
+            // After the climb's/flight's absolute position write, so a ladder
+            // step or a fly move is visible as a `Transform` delta.
             footsteps::advance_footsteps
                 .after(AhoySystems::MoveCharacters)
-                .after(ladder::climb),
+                .after(ladder::climb)
+                .after(noclip::fly),
         ),
     );
 

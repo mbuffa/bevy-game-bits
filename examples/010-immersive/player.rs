@@ -12,7 +12,7 @@ use bevy_ahoy::prelude::*;
 use bevy_enhanced_input::prelude::ContextActivity;
 use bevy_game_bits::inventory::prelude::InventoryWindow;
 
-use crate::{classes::PlayerSpawn, config, footsteps::Footsteps, input};
+use crate::{classes::PlayerSpawn, config, footsteps::Footsteps, input, noclip::Noclip};
 
 pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
     let player = add.entity;
@@ -37,9 +37,18 @@ pub fn spawn_player(add: On<Add, PlayerSpawn>, mut commands: Commands) {
             // player walks into. See `config::PLAYER_PUSH_MASS`.
             Mass(config::PLAYER_PUSH_MASS),
             Footsteps::default(),
+            Noclip::new(config::NOCLIP_DEFAULT),
             Name::new("Player"),
         ))
         .insert(input::player_input_bundle());
+
+    // Debug noclip (`config::NOCLIP_DEFAULT`, `noclip.rs`) starts with the
+    // collider disabled too — `noclip::toggle_noclip` keeps the two in sync
+    // from here on, but spawning with them out of sync would let the very
+    // first frame's ahoy step depenetrate the player against the floor.
+    if config::NOCLIP_DEFAULT {
+        commands.entity(player).insert(ColliderDisabled);
+    }
 
     commands.spawn((
         Camera3d::default(),

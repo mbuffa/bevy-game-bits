@@ -33,6 +33,7 @@ use bevy_game_bits::audio::PlaySfx;
 use crate::classes::{PropCrate, PropWoodCrate};
 use crate::config;
 use crate::ladder::Climbing;
+use crate::noclip::Noclip;
 
 /// Stride bookkeeping for the player. One component, inserted in
 /// `player::spawn_player`.
@@ -121,6 +122,7 @@ pub fn stash_fall_speed(
 /// `.after(AhoySystems::MoveCharacters).after(ladder::climb)` — the slot
 /// `ladder::climb` occupies, and after it so its absolute position write shows.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn advance_footsteps(
     time: Res<Time>,
     clips: Res<FootstepClips>,
@@ -131,6 +133,7 @@ pub fn advance_footsteps(
             &CharacterControllerState,
             &mut Footsteps,
             Has<Climbing>,
+            &Noclip,
         ),
         With<CharacterController>,
     >,
@@ -142,7 +145,7 @@ pub fn advance_footsteps(
     let dt = time.delta_secs().max(1.0e-6);
     let frozen = windows.iter().any(|w| w.open);
 
-    for (transform, state, mut steps, climbing) in &mut players {
+    for (transform, state, mut steps, climbing, noclip) in &mut players {
         let pos = transform.translation;
         let Some(last) = steps.last_pos.replace(pos) else {
             continue; // first tick: just seed last_pos
@@ -153,6 +156,17 @@ pub fn advance_footsteps(
         // A teleport (or a frozen frame) resets the edge state and contributes
         // no distance.
         if frozen || delta.length() > config::FOOTSTEP_MAX_STEP_M {
+            steps.was_grounded = grounded;
+            continue;
+        }
+
+        // Flying: no walking, no landing, no sound at all. Unlike the
+        // teleport guard above, a sane fly speed's per-step delta stays well
+        // under `FOOTSTEP_MAX_STEP_M`, and `state.grounded` is computed
+        // independently by ahoy's own (discarded) step, so it can still read
+        // "grounded" while skimming the real floor — this has to be checked
+        // explicitly, the same way `climbing` already is below.
+        if noclip.active {
             steps.was_grounded = grounded;
             continue;
         }

@@ -1,12 +1,13 @@
-//! Warehouse lighting and the wall switch that controls it (SPEC.md Phase 9).
+//! Warehouse lighting and the wall switch that controls it (SPEC.md Phase 9 /
+//! 12 / 21).
 //!
-//! The room loads dark: `GlobalAmbientLight` sits at `config::AMBIENT_DARK`,
-//! there is no sun, and the big overhead bank of `LightFixture` lamps is
-//! *off*. Four bracket lamps — one on each platform pillar — stay lit (on a
-//! `targetname` no switch drives), and the switch carries its own red
-//! `PointLight` on platform B's wall as a beacon. Stack crates onto platform B
-//! (it has no ladder — that's Phase 8), walk to the switch, press RMB (or E),
-//! and the warehouse comes on.
+//! The room loads LIT (Phase 12): `GlobalAmbientLight` sits at
+//! `config::AMBIENT_LIT`, there is no sun, and the big overhead bank of
+//! `LightFixture` lamps is *on*. Four bracket lamps on the north/south walls
+//! stay lit regardless (on a `targetname` no switch drives), and the switch
+//! carries its own `PointLight` beacon. Since Phase 21 the switch is on the
+//! storage floor beside the office door — walk to it, press RMB (or E), and the
+//! main bank toggles.
 //!
 //! | system / observer | when | job |
 //! |---|---|---|
@@ -23,13 +24,22 @@
 //! 1. **The `sync_*` systems are idempotent every-frame mirrors, not
 //!    `OnEnter`-style edges** — the `src/inventory` `sync_window_visibility`
 //!    lesson: a fixture spawned mid-game has to come up in the right state
-//!    with no transition to hook. There are ≤ 9 fixtures, so it's free.
+//!    with no transition to hook. There are 27 fixtures (Phase 21 iter 2), so
+//!    it's still cheap.
 //! 2. **`sync_ambient` keys off *switches*, not fixtures.** The pillar
 //!    brackets are always `Powered`, so "any fixture lit" would pin the
 //!    ambient bright forever and there'd be no dark to fix.
 //! 3. **The prompt is the existing `Interactable::prompt`**, mutated on
 //!    toggle — `interact::update_focus` clones it every frame and
 //!    `ui::update_prompt` already renders it. No new UI.
+//! 4. **A lamp is occluded by a wall only where its map data sets
+//!    `shadows=1`** (`spawn_fixtures` reads `fixture.shadows` straight into
+//!    `SpotLight::shadows_enabled`, below) — with it off, Bevy applies range
+//!    and cone-angle falloff but no occlusion at all, so the lamp lights
+//!    straight through any wall inside its cone. Once the hall grew into
+//!    three sealed rooms (Phase 21) that stopped being safe for every lamp;
+//!    `gen_map.py`'s `_check_leaks()` is what now decides which ones need it
+//!    (12 of 27) rather than this file — see `config::LAMP_SHADOWS`.
 //!
 //! Wiring uses bevy_trenchbroom's built-in `Target` / `Targetable` entity-IO
 //! base classes for the switch→lamp link (`target` / `targetname` strings).
