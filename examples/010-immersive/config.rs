@@ -670,7 +670,7 @@ pub const AUTOPILOT_TAP_SECS: f32 = 0.15;
 
 /// The keyboard-free ladder check. In order: walk straight into the rungs with
 /// no E press — `climbing` must stay false (no on-contact grab) and `x` must
-/// stall at ~-0.67 against the visual's solid collider (without it the body
+/// stall at ~0.30 against the visual's solid collider (without it the body
 /// walks clean through, under the platform, to the west wall at x ~-11); then a short
 /// approach pressing E (mounts only when the "use" ray focuses the ladder,
 /// never on contact) — grab #1, with no
@@ -701,9 +701,11 @@ const STILL: bevy::math::Vec2 = bevy::math::Vec2::ZERO;
 pub const AUTOPILOT_SCRIPT: &[AutopilotStep] = &[
     // Walk into the ladder, no E press. Two proofs in one leg: `climbing` stays
     // false while the body is pressed against the rungs (no on-contact grab),
-    // and `x` stalls at ~-0.67 — the visual's solid collider. Without that
-    // collider the body walks straight through, under the platform, to the west wall
-    // at x ~-11, y ~0.9 (the binary regression signal).
+    // and `x` stalls at ~0.30 — the visual's solid collider (moved from ~-0.67
+    // when the ladder sat a bay deeper, before Phase 21 iteration 4 re-sited it
+    // onto the rack's outer end-frame face). Without that collider the body
+    // walks straight through, under the platform, to the west wall at x ~-11,
+    // y ~0.9 (the binary regression signal).
     AutopilotStep {
         duration: 3.0,
         movement: FWD,

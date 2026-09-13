@@ -1578,6 +1578,9 @@ textures) as forklift-height **pallet racking**:
   its south end-frame to the z-192 slab, where the wooden crate + crowbar sit.
   So `PLAYER_SPAWN`, the ladder walk, the crest z, and `AUTOPILOT_CRATES` are
   all still pinned — **`config::AUTOPILOT_SCRIPT` needs no numeric change**.
+  (Superseded by iteration 4 below: the byte-identical brush sat a full bay
+  *inside* the rack, behind the uprights, not on the outer face it's meant to
+  be bolted to — `LADDER_BRUSH` was re-sited and is no longer pinned.)
 - **Ceiling z 288 → 432** (~11 m); **footprint `x ±640/y ±448` → `±960/±672`**
   (≈ 48 × 34 m). `_wall_with_holes` gained a y-span parameter. `HALL_HX`/`HALL_HY`
   drive everything.
@@ -1689,6 +1692,57 @@ shadow-casters lit was not benchmarked against the pre-fix 1-caster baseline;
 if it regresses, the documented fallback is trimming the `night` brackets'
 cone/range instead of shadowing them (measured clean at cone 110°/range 18 m
 with zero shadow maps, at the cost of losing their long rake across the hall).
+
+### Phase 21 iteration 4 — re-site the access ladders ✅
+
+The byte-identical `LADDER_BRUSH` kept through iteration 2 turned out to sit a
+full bay *inside* the x −448 run: its visual plane (the brush centre —
+`ladder::setup_ladders` builds the rails-and-rungs mesh and its solid collider
+at `aabb.center()`, only `LADDER_VISUAL_DEPTH` ≈ 4 u deep) landed at TB y 44,
+34 u north of the run's south end-frame face (y 8) — behind the uprights,
+under the z-192 slab, instead of bolted to the frame's outer face. A screenshot
+showed it. `LADDER2_BRUSH` (the NW roof-access platform) had the same class of
+bug: centred at TB y 556, it floated 26 u (0.66 m) clear of the platform deck
+it serves (south face y 584).
+
+Both re-sited so the visual plane abuts the outer face of the structure it
+serves, and narrowed 48 u → 24 u (0.61 m, a believable rail spacing instead of
+nearly the full rack bay). New `gen_map.py` constants `_LADDER_HW`/`_LADDER_D`/
+`_LADDER_INSET` are shared by both and derive the position from `RACK_CRATE_CX`/
+`_RACK_Y` and the platform's own geometry rather than repeating literals —
+`LADDER_BRUSH` is **no longer pinned**; only `PLAYER_SPAWN`, the z-192 crest
+slab and `AUTOPILOT_CRATES` still are. `_check_overlaps` stays clean (rack
+ladder vs the z-192 slab and LADDER2 vs the platform deck both overlap by
+exactly the 16 u shell tolerance, same as before).
+
+**Verified 2026-09-13** (`IMMERSIVE_AUTOPILOT=1 IMMERSIVE_TELEMETRY=1`, real
+`cargo run`, `NOCLIP_DEFAULT` temporarily flipped to `false` for the run since
+noclip flies straight through the collider otherwise):
+- Opening leg (walk in, no E): `x` stalls at `0.3126` — up from the predicted
+  face+radius (`≈0.30`), down from the pre-fix `≈-0.67`. `climbing` stays
+  false throughout.
+- Grab #1 snaps to the mount plane at `x = 0.5476` — exactly `Ladder::mount()`'s
+  `line - facing * LADDER_STANDOFF` computed from the new brush centre.
+- Climb rises cleanly (`y` 2.75 → 3.98 → …) and the top-of-range rule fires at
+  **`y = 6.1882`** — matches the predicted ladder-top height (`aabb.max.y +
+  PLAYER_HEIGHT/2`) to four decimal places.
+- Crest walk hands off to `grounded=true, climbing=false` at **`y = 5.7918`**
+  — the z-192 slab's own top height, not the ladder-top height, confirming the
+  body actually stands *on the deck* rather than clipping through it (the
+  iteration-2 bug). Position holds rock-steady through the final "hold on
+  platform" leg. Zero `error!`/`warn!`/panic in the whole run; process exited
+  cleanly (code 0).
+- `cargo test --example 010-immersive`: 22 pass. `cargo clippy --example
+  010-immersive`: same 4 pre-existing warnings as the unmodified tree (none new).
+
+**Left for a human:** a look at the re-sited geometry in person — this
+session's screenshot attempts rendered a blank grey frame (crosshair + quickbar
+only, no world geometry) on every try, an apparent rendering hang unrelated to
+this change (nothing here touches lighting/rendering setup, and the same
+telemetry run's physics/collision were exact); worth a fresh interactive launch
+to confirm the visual read matches the numbers above. Also LADDER2 (NW
+platform) has no autopilot coverage at all — climb it by hand to confirm it now
+meets the platform edge.
 
 ## Phase 22 — Debug noclip mode ✅
 

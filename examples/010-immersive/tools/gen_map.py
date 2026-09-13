@@ -37,9 +37,9 @@ height PALLET RACKING. Interior 1920 x 1344 x 432 u (48.8 x 34.1 x 10.97 m).
 FOUR long north-south racking runs (x-centres -448/-180/120/400, ~88 u wide,
 y 8..520), each 3 pallet-level DECK slabs (tops z 64/192/304) on iron uprights,
 with ~4.6-5.8 m aisles between them and a north cross-aisle. Only the x -448 run
-is CLIMBABLE: it drops the z-64 level and the kept LADDER (byte-PINNED) climbs
-its south end-frame to the z-192 slab, where the wooden crate (lockpick) +
-crowbar sit -- throw the crate off to break it. A person-sized roof-access
+is CLIMBABLE: it drops the z-64 level and LADDER is bolted to its south
+end-frame's outer face, climbing to the z-192 slab, where the wooden crate
+(lockpick) + crowbar sit -- throw the crate off to break it. A person-sized roof-access
 PLATFORM + its own func_ladder (LADDER2) is tucked in the NW corner (future roof
 hatch).
 
@@ -173,8 +173,10 @@ LADDER_TEX = "skip"
 # carries the office man-door + two sealed truck-door panels. See SPEC.md Ph 21.
 #
 # Pinned so `config::AUTOPILOT_SCRIPT` / `IMMERSIVE_AUTOPILOT=crates` need no
-# numeric change: PLAYER_SPAWN, LADDER_BRUSH (now the crate rack's end-frame
-# access ladder), the z-192 crest slab it climbs to, and AUTOPILOT_CRATES.
+# numeric change: PLAYER_SPAWN, the z-192 crest slab the rack ladder climbs to,
+# and AUTOPILOT_CRATES. LADDER_BRUSH itself is *not* pinned any more (Phase 21
+# iteration 4 re-sited it onto the end frame's outer face) — only its comment
+# in config.rs moved, not the script's timing.
 DOORWAY_HW = 22    # man-door half-width (u); DOOR_WIDTH is ~1.12 m ≈ 44 u
 DOORWAY_H = 90     # man-door opening height (u) ≈ 2.3 m
 HALL_HX = 960     # hall interior half-width (u) ≈ 24.4 m  -> 48.8 m across
@@ -234,11 +236,20 @@ WORLDSPAWN += _wall_with_holes(HALL_HX, _OX, -_OY, _OY, CEILING_Z + 16, [
 # crates; north cross-aisle y 520..HALL_HY). Aisle centres ≈ x -314 / -30 / 260.
 #
 # The x -448 run is the only CLIMBABLE one: it drops the z-64 floor level (so
-# nothing sits in the ladder's drop column) and the kept LADDER_BRUSH climbs its
-# south end-frame to the z-192 slab, where the wooden crate + crowbar sit.
+# nothing sits in the ladder's drop column) and LADDER_BRUSH is bolted to its
+# south end-frame's outer face, climbing to the z-192 slab, where the wooden
+# crate + crowbar sit.
 _RACK_TOPS = (64, 192, 304)
 _RACK_HW = 44          # run half-width (x)
 _RACK_Y = (8, 520)     # run extent (y)
+
+# Shared `func_ladder` dimensions (both LADDER_BRUSH and LADDER2_BRUSH): a
+# believable 24 u (0.61 m) rail spacing, a generous grab-volume depth in y
+# (never drawn — only the brush *centre* is visual, LADDER_VISUAL_DEPTH deep),
+# and an inset so that centre lands right on the face it's bolted to.
+_LADDER_HW = 12    # half-width in x -> 24 u between the rails
+_LADDER_D = 40     # grab-volume depth in y; aim generosity only
+_LADDER_INSET = 2  # ~half the 0.10 m visual depth, so the rungs abut the face
 
 
 def _pallet_run(cx, tops=_RACK_TOPS):
@@ -265,15 +276,22 @@ RACKS = (
 # --- roof-access platform (NW corner) -----------------------------------
 #
 # Person-sized (88 u ≈ 2.2 m square) landing tucked against the west + north
-# walls, in the north cross-aisle. Its own `func_ladder` (LADDER2_*) climbs its
-# south face. Roof access itself is still future work — a third func_ladder
-# through a ceiling hole above this platform.
+# walls, in the north cross-aisle. Its own `func_ladder` (LADDER2_*) is bolted
+# to its south face. Roof access itself is still future work — a third
+# func_ladder through a ceiling hole above this platform.
+_PLATFORM_CX = -916          # (-960 + -872) / 2
+_PLATFORM_SOUTH_Y = 584
 PLATFORM = [
     box_brush((-960, 584, 176), (-872, 672, 192), DECK, tex_top=DECK),
     box_brush((-960, 584, 0), (-944, 600, 176), DECK),   # SW upright
     box_brush((-888, 584, 0), (-872, 600, 176), DECK),   # SE upright
 ]
-LADDER2_BRUSH = box_brush((-932, 528, 0), (-888, 584, 208), LADDER_TEX)
+_LADDER2_CY = _PLATFORM_SOUTH_Y - _LADDER_INSET
+LADDER2_BRUSH = box_brush(
+    (_PLATFORM_CX - _LADDER_HW, _LADDER2_CY - _LADDER_D // 2, 0),
+    (_PLATFORM_CX + _LADDER_HW, _LADDER2_CY + _LADDER_D // 2, 208),
+    LADDER_TEX,
+)
 LADDER2_ENTITY = {"classname": "func_ladder", "face_yaw": "90", "prompt": "Climb ladder"}
 
 # --- management office (SE corner) ----------------------------------------
@@ -325,13 +343,19 @@ YARD = [
 
 WORLDSPAWN += RACKS + PLATFORM + OFFICE + TRUCK_PANELS + YARD
 
-# Crate-rack access ladder: the kept iron end-frame ladder on the south face of
-# the x -448 racking run, from the floor to 16 u above the z-192 pallet slab.
-# `skip`-textured -> invisible; ladder.rs turns it into a Sensor + builds the
-# rails-and-rungs mesh + the *solid* thin collider that actually stops you.
-# PINNED byte-for-byte (SPEC.md Phase 21) — the autopilot ladder walk is keyed
-# to it.
-LADDER_BRUSH = box_brush((-472, 24, 0), (-424, 64, 208), LADDER_TEX)
+# Crate-rack access ladder: bolted to the OUTER (south) face of the x -448
+# racking run's south end frame, from the floor to 16 u above the z-192 pallet
+# slab. `skip`-textured -> invisible; ladder.rs turns it into a Sensor +
+# builds the rails-and-rungs mesh + the *solid* thin collider that actually
+# stops you. The visual plane is the brush *centre* (ladder.rs builds the
+# mesh at `aabb.center()`, only LADDER_VISUAL_DEPTH deep), so the centre —
+# not the near face — is what has to sit on `_RACK_Y[0]`.
+_LADDER_CY = _RACK_Y[0] - _LADDER_INSET
+LADDER_BRUSH = box_brush(
+    (RACK_CRATE_CX - _LADDER_HW, _LADDER_CY - _LADDER_D // 2, 0),
+    (RACK_CRATE_CX + _LADDER_HW, _LADDER_CY + _LADDER_D // 2, 208),
+    LADDER_TEX,
+)
 
 # --- crates ---------------------------------------------------------------
 #
