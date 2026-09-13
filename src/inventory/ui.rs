@@ -11,7 +11,9 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
 use crate::inventory::config::{InventoryBoardSpec, InventoryConfig, InventoryTheme};
-use crate::inventory::drag::{InventoryClicks, InventoryCursor, InventoryDragState, InventorySelection};
+use crate::inventory::drag::{
+    InventoryClicks, InventoryCursor, InventoryDragState, InventorySelection,
+};
 use crate::inventory::grid::InventoryGrid;
 use crate::inventory::items::{InventoryItem, InventorySlot};
 use crate::inventory::InventoryWindow;
@@ -424,10 +426,12 @@ pub fn sync_placement_preview(
     // The one live drag's source state, and the board it points at. The
     // preview is computed against that target board's own cursor/grid/config.
     let active: Option<(Entity, &InventoryDragState)> =
-        boards.iter().find_map(|(_, drag, _, _, _, _, window)| match drag {
-            InventoryDragState::Held { target, .. } if window.open => Some((*target, drag)),
-            _ => None,
-        });
+        boards
+            .iter()
+            .find_map(|(_, drag, _, _, _, _, window)| match drag {
+                InventoryDragState::Held { target, .. } if window.open => Some((*target, drag)),
+                _ => None,
+            });
 
     for (board, _, cursor, grid, config, theme, window) in &boards {
         let preview = match active {

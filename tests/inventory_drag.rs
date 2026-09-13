@@ -146,7 +146,10 @@ fn hover_cell_exclusive(app: &mut App, board: Entity, cell: UVec2) {
     let normalized = center_px / config.board_size() - Vec2::splat(0.5);
     app.world_mut()
         .run_system_once(
-            move |mut boards: Query<(Entity, &mut RelativeCursorPosition), With<InventoryBoard>>| {
+            move |mut boards: Query<
+                (Entity, &mut RelativeCursorPosition),
+                With<InventoryBoard>,
+            >| {
                 for (entity, mut rel) in &mut boards {
                     if entity == board {
                         rel.cursor_over = true;
@@ -620,7 +623,8 @@ fn a_board_that_refuses_transfers_can_still_be_rearranged_internally() {
 
 #[test]
 fn a_transfer_needs_the_bit_on_both_ends() {
-    for (src_transfers, tgt_transfers) in [(true, true), (true, false), (false, true), (false, false)]
+    for (src_transfers, tgt_transfers) in
+        [(true, true), (true, false), (false, true), (false, false)]
     {
         let mut app = new_app();
         let bag = spawn_board(&mut app, InventoryBoardSpec::default());
@@ -632,10 +636,18 @@ fn a_transfer_needs_the_bit_on_both_ends() {
         drag_between(&mut app, stash, UVec2::new(0, 0), bag, UVec2::new(2, 2));
 
         if src_transfers && tgt_transfers {
-            assert_eq!(parent_of(&app, item), bag, "{src_transfers},{tgt_transfers}");
+            assert_eq!(
+                parent_of(&app, item),
+                bag,
+                "{src_transfers},{tgt_transfers}"
+            );
             assert_eq!(slot_of(&app, item), UVec2::new(2, 2));
         } else {
-            assert_eq!(parent_of(&app, item), stash, "{src_transfers},{tgt_transfers}");
+            assert_eq!(
+                parent_of(&app, item),
+                stash,
+                "{src_transfers},{tgt_transfers}"
+            );
             assert_eq!(slot_of(&app, item), UVec2::new(0, 0));
         }
     }
@@ -728,7 +740,8 @@ fn a_double_click_with_no_named_board_only_reports_activation() {
 
 #[test]
 fn a_double_click_needs_transfers_on_both_ends() {
-    for (src_transfers, tgt_transfers) in [(true, true), (true, false), (false, true), (false, false)]
+    for (src_transfers, tgt_transfers) in
+        [(true, true), (true, false), (false, true), (false, false)]
     {
         let mut app = new_app();
         let bag = spawn_board(&mut app, InventoryBoardSpec::default());
@@ -741,7 +754,11 @@ fn a_double_click_needs_transfers_on_both_ends() {
         double_click(&mut app, stash, UVec2::new(0, 0));
 
         if src_transfers && tgt_transfers {
-            assert_eq!(parent_of(&app, item), bag, "{src_transfers},{tgt_transfers}");
+            assert_eq!(
+                parent_of(&app, item),
+                bag,
+                "{src_transfers},{tgt_transfers}"
+            );
         } else {
             assert_eq!(
                 parent_of(&app, item),

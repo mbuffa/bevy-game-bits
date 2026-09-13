@@ -158,8 +158,8 @@ pub mod prelude {
         InventoryCommands, InventoryConfig, InventoryCursor, InventoryDescriptionSwatch,
         InventoryDescriptionText, InventoryDragState, InventoryGrid, InventoryItem,
         InventoryLayout, InventoryParts, InventoryPlugin, InventoryPreview, InventoryRoot,
-        InventorySelection, InventorySet, InventorySlot, InventoryTheme,
-        InventoryTransferTarget, InventoryWindow, PanelSide, ResizeInventory,
+        InventorySelection, InventorySet, InventorySlot, InventoryTheme, InventoryTransferTarget,
+        InventoryWindow, PanelSide, ResizeInventory,
     };
 }
 
