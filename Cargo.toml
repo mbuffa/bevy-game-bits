@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { version = "0.18", features = ["dynamic_linking", "ktx2", "zstd_rust", "wav", "experimental_pbr_pcss"] }
+bevy = { version = "0.18", features = ["ktx2", "zstd_rust", "wav", "experimental_pbr_pcss"] }
 bevy_hanabi = "0.18"
 # Pinned to 0.6: the 0.7 release requires Bevy 0.19. Used by examples/009-derby.
 avian3d = "0.6"
@@ -30,6 +30,19 @@ serde_json = "1"
 # `serde` core crate (already in the lock transitively) to a direct dep.
 serde = { version = "1", features = ["derive"] }
 
+# `dynamic_linking` links `bevy_dylib`, which cannot be built for wasm. Keeping it in a
+# target-conditional section means `cargo run --example …` is unchanged natively while
+# `bevy build web` just doesn't see it — no `--no-default-features` dance, no new feature flag.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+bevy = { version = "0.18", features = ["dynamic_linking"] }
+
+# Enable the `getrandom` web backend. `bevy-cli` injects the matching
+# `--cfg getrandom_backend="wasm_js"` rustflag automatically when it detects a `^0.3`
+# `getrandom` in the dependency tree; the feature still has to be turned on here.
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { version = "0.4", features = ["wasm_js"], package = "getrandom" }
+
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
@@ -49,8 +62,11 @@ codegen-units = 1
 # Slows compile times, marginal improvements.
 # lto = "thin"
 
-# Optimize for size in the wasm-release profile to reduce load times and bandwidth usage on web.
-[profile.wasm-release]
+# `web-release` is the profile name `bevy-cli` selects for `bevy build --release web`
+# (see `bevy_cli::web::profiles`) — it only injects its own default when the manifest
+# doesn't define one, so this profile takes over cleanly.
+# Optimize for size to reduce load times and bandwidth usage on web.
+[profile.web-release]
 # Default to release profile values.
 inherits = "release"
 # Optimize with size in mind (also try "z", sometimes it is better).
@@ -58,3 +74,11 @@ inherits = "release"
 opt-level = "s"
 # Strip all debugging information from the binary to slightly reduce file size.
 strip = "debuginfo"
+# Safe to enable here (unlike the native `release` profile above): the Windows-crash
+# FIXME on `[profile.release]`'s `lto` is native-only and doesn't apply to wasm.
+lto = "thin"
+
+# `web` is the profile `bevy-cli` selects for `bevy run web` (non-release) — fast
+# iteration, same as native `dev`.
+[profile.web]
+inherits = "dev"

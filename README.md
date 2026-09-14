@@ -13,6 +13,11 @@ You can then run any example with this command:
 cargo run --example 004-infinite-runner
 ```
 
+Run `make help` for the full command catalog (native run/build/test/lint,
+plus building the examples for the browser via `bevy-cli` — see `make
+web-run-004-infinite-runner` for a single example, or `make web-all && make
+serve` for the whole gallery).
+
 ## Reusable bits
 
 A few mechanics have graduated out of the examples into the library, so they
